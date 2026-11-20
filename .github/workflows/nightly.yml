@@ -1,0 +1,95 @@
+name: Aggiornamento notturno
+
+# Legge i portali dei gestori, costruisce la pagina cifrata e la pubblica su GitHub Pages.
+# Nessun dato viene scritto nel repository: la pagina è un artefatto di deploy.
+#
+# Questo repository è pubblico, quindi lo sono anche questi log. Il programma stampa solo
+# l'esito per casa e il tipo di errore: mai contenuti delle pagine, indirizzi o credenziali.
+
+on:
+  schedule:
+    # 02:17 UTC = 03:17 ora italiana in inverno, 04:17 in estate. Lontano dall'ora piena,
+    # quando la coda dei job schedulati di GitHub è più carica e le partenze slittano.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Leggi i portali e pubblica
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write      # deploy su GitHub Pages
+      id-token: write   # richiesto da actions/deploy-pages
+      actions: write    # solo per il passo "Mantieni attivo lo schedule"
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Dipendenze
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Indirizzo del sito
+        id: pages
+        uses: actions/configure-pages@v6
+
+      # Se un portale non risponde, la casa interessata conserva i dati della pagina già
+      # online (SITE_URL) e la pagina lo segnala. Se non risponde nessuno il passo fallisce
+      # e non si pubblica nulla: resta online la versione precedente.
+      - name: Leggi i portali e costruisci la pagina
+        id: sync
+        env:
+          FAMILY_PASSPHRASE: ${{ secrets.FAMILY_PASSPHRASE }}
+          OWNER_PASSPHRASE: ${{ secrets.OWNER_PASSPHRASE }}
+          SANTA_KB_URL: ${{ secrets.SANTA_KB_URL }}
+          SANTA_KB_USER: ${{ secrets.SANTA_KB_USER }}
+          SANTA_KB_PASS: ${{ secrets.SANTA_KB_PASS }}
+          VASSENA_KB_URL: ${{ secrets.VASSENA_KB_URL }}
+          VASSENA_KB_USER: ${{ secrets.VASSENA_KB_USER }}
+          VASSENA_KB_PASS: ${{ secrets.VASSENA_KB_PASS }}
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python -m casecal sync --out dist
+
+      - name: Carica la pagina
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+      - name: Pubblica
+        id: deployment
+        uses: actions/deploy-pages@v5
+
+      # GitHub disattiva i workflow schedulati dei repository pubblici dopo 60 giorni senza
+      # attività, e questo job non fa commit. Riabilitarsi a ogni esecuzione azzera il conteggio.
+      - name: Mantieni attivo lo schedule
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --silent --method PUT "repos/${GITHUB_REPOSITORY}/actions/workflows/nightly.yml/enable" \
+            || echo "::warning::Impossibile rinnovare lo schedule: controlla che il workflow resti abilitato."
+
+      # La pagina è già online con quello che si è potuto leggere; il job fallisce comunque,
+      # così GitHub manda la notifica e qualcuno guarda il portale che ha dato problemi.
+      - name: Segnala l'aggiornamento parziale
+        if: steps.sync.outputs.degraded == 'true'
+        run: |
+          echo "::error::Aggiornamento parziale: almeno una casa richiede attenzione (vedi gli avvisi del passo di lettura)."
+          exit 1

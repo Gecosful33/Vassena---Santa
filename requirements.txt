@@ -1,0 +1,6 @@
+# Runtime dependencies of the nightly job. Pinned so that an unattended run
+# never picks up an untested release.
+requests==2.34.2
+beautifulsoup4==4.15.0
+lxml==6.1.3
+cryptography==50.0.1
