@@ -299,6 +299,27 @@ def test_only_explicit_zeros_make_a_booking_an_own_stay():
     assert lone[0].kind == BOOKING
 
 
+def test_a_row_that_bills_something_on_the_same_dates_keeps_them_a_booking():
+    # A booking and the one it replaced can be listed on the same dates. Hiding real
+    # guests behind "blocked" is the costly mistake, so one row that is not explicit
+    # zeros is enough to leave the booking alone.
+    zeros = (Decimal("0"), Decimal("0"))
+    stays = [Stay(date(2026, 6, 1), date(2026, 6, 3)), Stay(date(2026, 6, 5), date(2026, 6, 8)),
+             Stay(date(2026, 6, 10), date(2026, 6, 12))]
+    reservations = [
+        Reservation(date(2026, 6, 1), date(2026, 6, 3), "Diretta", None, zeros),
+        Reservation(date(2026, 6, 1), date(2026, 6, 3), "Airbnb", 2, (Decimal("300"), Decimal("210"))),  # someone pays
+        Reservation(date(2026, 6, 5), date(2026, 6, 8), "Diretta", None, (None, None)),                   # says nothing
+        Reservation(date(2026, 6, 5), date(2026, 6, 8), "Diretta", None, zeros),
+        Reservation(date(2026, 6, 10), date(2026, 6, 12), "Diretta", None, zeros),
+        Reservation(date(2026, 6, 10), date(2026, 6, 12), "Diretta", None, zeros),                        # twice nothing
+    ]
+    marked = own_use_as_closed(stays, reservations, covered_from=date(2026, 1, 1), covered_to=date(2027, 1, 1))
+    assert [s.kind for s in marked] == [BOOKING, BOOKING, CLOSED]
+    assert marked == own_use_as_closed(stays, reservations[::-1],
+                                       covered_from=date(2026, 1, 1), covered_to=date(2027, 1, 1))  # in any order
+
+
 def test_an_own_stay_across_the_edge_of_the_data_is_matched_on_the_part_inside():
     # The calendar ends on 1 January: the booking is known there as 30 Dec -> 1 Jan.
     stays = [Stay(date(2026, 12, 30), date(2027, 1, 1))]

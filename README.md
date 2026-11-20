@@ -164,8 +164,10 @@ soggiorni dei proprietari come prenotazioni a importo zero invece che come date
 bloccate. Per le case che lo dichiarano in `properties.toml` con
 `unpaid_is_own_use = true`, una prenotazione con tutti gli importi a zero è trattata
 come date bloccate: non compare tra i prossimi ospiti e un periodo di famiglia su
-quelle notti risulta bloccato. Conta solo una riga di zeri espliciti; le statistiche
-dell'area proprietà restano quelle del portale, che quelle notti le conta come vendute.
+quelle notti risulta bloccato. Conta solo una riga di zeri espliciti, e se sulle stesse
+date il portale elenca anche una riga con un importo resta una prenotazione: scambiare
+degli ospiti per una casa libera è l'errore che costa. Le statistiche dell'area
+proprietà restano quelle del portale, che quelle notti le conta come vendute.
 
 ### Chi usa la casa
 
@@ -201,14 +203,17 @@ modificano lo stesso periodo negli stessi istanti vale l'ultima scrittura.
 
 **Avviso al proprietario.** Per non dover aprire la pagina per accorgersene, il job
 notturno tiene aperta una issue «Date da far bloccare al gestore», assegnata al
-proprietario del repository: GitHub gli scrive una mail. Succede quando un periodo
+proprietario del repository: GitHub lo notifica, per mail con le impostazioni
+predefinite dell'account. Succede quando un periodo
 entra in «Da far bloccare al gestore» o in «Ci sono ospiti in quelle date» (appena
 inserito, perché il gestore ha riaperto la vendita, o perché è arrivata una
 prenotazione); il lunedì arriva un promemoria finché restano periodi non bloccati che
 iniziano entro 90 giorni. Quando non resta nulla in sospeso il job chiude la issue. Il
 testo è generico, senza date né nomi, perché la issue è pubblica: il dettaglio è nella
 pagina. La issue la scrive GitHub Actions e non il proprietario, perché nessuno riceve
-notifiche di ciò che fa da sé.
+notifiche di ciò che fa da sé. I periodi di una casa che quella notte non è stata
+letta, o è stata letta con avvisi, non vengono giudicati: la segnalazione resta com'è
+(e il job risulta comunque fallito); l'elenco nella pagina resta il riferimento.
 
 Le modifiche degli altri arrivano quando si riapre la pagina o si torna sulla scheda
 (e comunque entro un minuto e mezzo); il job notturno le consolida nella pagina.

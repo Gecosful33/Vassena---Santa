@@ -481,15 +481,22 @@ def own_use_as_closed(
     every amount at zero. Those are not guests: in the calendar they read like
     dates closed to sale. A booking stays a booking when the portal lists no
     reservation for its dates, or lists one without any amount at all: only a
-    row of explicit zeros says "nobody pays for this".
+    row of explicit zeros says "nobody pays for this". And when the portal
+    lists more than one row on the same dates (a booking and the one it
+    replaced), a single row that bills something, or says nothing, keeps them a
+    booking: taking guests for an empty house is the mistake that costs.
     """
-    unpaid: set[tuple[date, date]] = set()
+    # True as soon as one row on those dates is anything but explicit zeros.
+    billed: dict[tuple[date, date], bool] = {}
     for reservation in reservations:
+        key = (max(reservation.check_in, covered_from), min(reservation.check_out, covered_to))
         amounts = [value for value in reservation.values if value is not None]
-        if amounts and all(value == 0 for value in amounts):
-            unpaid.add((max(reservation.check_in, covered_from), min(reservation.check_out, covered_to)))
+        unpaid = bool(amounts) and all(value == 0 for value in amounts)
+        billed[key] = billed.get(key, False) or not unpaid
     return [
-        Stay(stay.start, stay.end, CLOSED) if stay.kind == BOOKING and (stay.start, stay.end) in unpaid else stay
+        Stay(stay.start, stay.end, CLOSED)
+        if stay.kind == BOOKING and billed.get((stay.start, stay.end)) is False
+        else stay
         for stay in stays
     ]
 

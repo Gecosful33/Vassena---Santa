@@ -203,7 +203,6 @@ class GitHubIssues:
         except (KeyError, TypeError, ValueError):
             raise FamilyLogError(f"{what}: risposta inattesa") from None
 
-
     def comment(self, number: int, body: str, *, what: str) -> None:
         self._json("POST", f"/issues/{number}/comments", what, json={"body": body})
 
