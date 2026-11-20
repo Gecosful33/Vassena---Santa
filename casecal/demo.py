@@ -95,7 +95,7 @@ def _house(
         if stay.kind != BOOKING:
             detailed.append(stay)
             continue
-        channel = rng.choice(("Airbnb", "Airbnb", "Booking", "Diretta"))
+        channel = rng.choice(("Airbnb", "Airbnb", "Booking.com", "Diretta"))
         guests = rng.randint(2, 6) if with_guests else None
         detailed.append(replace(stay, channel=channel, guests=guests))
         gross = sum((Decimal(_SEASON_RATE[night.month]) for night in _nights(stay)), Decimal(0))

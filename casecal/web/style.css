@@ -199,15 +199,28 @@ button, input { font: inherit; color: inherit; }
 .rows { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
 .rows th { text-align: left; font-weight: 500; font-size: 12px; color: var(--text-muted); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 .rows td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+/* The last column ends where the card's own padding begins: on a phone those pixels are needed. */
+.rows th:last-child, .rows td:last-child { padding-right: 0; }
 .rows tr:last-child td { border-bottom: 0; }
 .rows .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 16px; }
 .rows .num:last-child { padding-right: 0; }
 .rows .date { white-space: nowrap; }
 .rows tr.year th { padding-top: 14px; font-size: 12px; font-weight: 650; color: var(--text-secondary); }
 .rows .state { display: inline-flex; align-items: flex-start; gap: 6px; }
-.rows .sub { display: block; color: var(--text-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
+/* Second lines give way first: they wrap when the screen is narrow or the device's font is
+   wide, so that dates and numbers stay whole and the table stays inside the page. */
+.rows .sub { display: block; color: var(--text-muted); font-size: 12px; font-weight: 400; white-space: normal; }
 .rows .state .ico { margin-top: 2px; }
 .rows tr.current td { font-weight: 600; }
+/* Narrow phones: four columns of dates and words have to fit in under 300px. The gaps
+   between columns give first, with the state's icon (the word beside it says the same),
+   then the text by one pixel; past that the box scrolls. */
+@media (max-width: 400px) {
+  .rows th, .rows td { padding-right: 6px; }
+  .rows .num { padding-right: 8px; }
+  .rows .state .ico { display: none; }
+}
+@media (max-width: 370px) { .rows { font-size: 13px; } }
 .empty { color: var(--text-secondary); font-size: 14px; margin-top: 8px; }
 .more { margin-top: 6px; }
 

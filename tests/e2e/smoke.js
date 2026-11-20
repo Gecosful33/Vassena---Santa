@@ -252,9 +252,9 @@ async function main() {
     assert.deepEqual(report.problems, [], "a table lost its shape");
   }
 
-  async function noSidewaysScroll(page) {
+  async function noSidewaysScroll(page, where = "") {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px`);
+    assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px${where && " " + where}`);
   }
 
   /** A sheet holds everything it shows: no field sticks out, nothing scrolls sideways. */
@@ -539,6 +539,21 @@ async function main() {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(150);
   await barsFollowTheHouseHours(page);
+  // Phones come in many widths and with fonts of their own, some wider than this
+  // machine's. On none of them may the page scroll sideways: a table too wide for its
+  // card scrolls inside its own box. From 390px up the guests and stays tables do not
+  // need even that. (At 360 and 375px the stays table once pushed the page sideways,
+  // unnoticed because only 390px was looked at.)
+  const boxed = ".scroll > table.rows:not(.kpi)";
+  assert.equal(await page.locator(boxed).count(), 4, "guests and stays tables sit in a box that scrolls on its own");
+  for (const width of [320, 344, 360, 375, 412, 430, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.waitForTimeout(150);
+    await noSidewaysScroll(page, `at ${width}px`);
+    const cramped = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
+      .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
+    if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table needs sideways scrolling`);
+  }
   // A tap on a day opens its sheet; no hover readout is left behind when it closes.
   await page.locator(".day.today").tap();
   await page.waitForSelector("dialog.sheet[open]");

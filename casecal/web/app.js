@@ -922,7 +922,9 @@
     var withDetails = guests.some(function (guest) { return !!stayDetails(guest.stay); });
     var withChannel = guests.some(function (guest) { return !!guest.stay.channel; });
     var next = guests.filter(function (guest) { return !guest.current; })[0];
-    append(card, el("table", { class: "rows" },
+    // In a box that scrolls on its own: whatever the screen and the device's font, a
+    // table too wide for the card must not make the whole page scroll sideways.
+    append(card, el("div", { class: "scroll" }, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
         el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
         el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
@@ -939,7 +941,7 @@
           el("td", { class: "num", text: F.int.format(stay.end - stay.start) }),
           withDetails ? el("td", null, stay.channel || (known ? guestsLabel(stay.guests) : ""),
             stay.channel && known ? el("span", { class: "sub", text: guestsLabel(stay.guests) }) : null) : null);
-      }))));
+      })))));
     if (guests.length > GUESTS_SHOWN) {
       var key = "guests:" + prop.id;
       append(card, el("button", {
@@ -1228,12 +1230,12 @@
           el("span", null, STATE_TEXT[stay.kind] + (running ? " · in corso" : ""),
             stayDetails(stay) ? el("span", { class: "sub", text: stayDetails(stay) }) : null)))));
     });
-    return el("table", { class: "rows" },
+    return el("div", { class: "scroll" }, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
         el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
         el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
         el("th", { scope: "col", class: "num", text: "Notti" }), el("th", { scope: "col", text: "Stato" }))),
-      el("tbody", null, rows));
+      el("tbody", null, rows)));
   }
 
   function staysSection() {
