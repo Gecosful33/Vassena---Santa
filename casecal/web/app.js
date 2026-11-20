@@ -5,7 +5,7 @@
 (function () {
   "use strict";
 
-  var C = CaseCalCrypto, L = CaseCalLogic;
+  var C = CaseCalCrypto, L = CaseCalLogic, Store = CaseCalStore;
   var SVG_NS = "http://www.w3.org/2000/svg";
   var STORE = "casecal.keys.v1";
   var WINDOWS_SHOWN = 4;
@@ -19,7 +19,11 @@
   function blankState() {
     return {
       family: null, owner: null, props: [], today: 0, filter: "all", year: null,
-      showPast: false, pastStays: {}, allWindows: {}, remembered: false
+      showPast: false, pastStays: {}, allWindows: {}, remembered: false,
+      // The family's own entries: the current map, where changes are written (null =
+      // read-only page), how far the log has been read, and the key that opens it.
+      entries: {}, store: null, cursor: 0, familyKey: null,
+      sync: { phase: "off", code: null }
     };
   }
 
@@ -198,6 +202,7 @@
   function lock() {
     clearKeys();
     hideTip();
+    dropSheet();
     state = blankState();
     renderLock();
   }
@@ -216,7 +221,18 @@
     });
     state.today = L.todayInZone(opened.family.tz, Date.now());
     document.title = opened.family.title || genericTitle;
+
+    // What the nightly build already knew, then whatever has been written since.
+    state.familyKey = opened.familyKey;
+    state.entries = L.foldEvents((opened.family.entries || []).map(function (raw) {
+      return Object.assign({ t: "set" }, raw);
+    }), {});
+    var log = opened.family.log;
+    state.store = Store.open(log, { storage: browserStorage() });
+    state.cursor = log && typeof log.cursor === "number" ? log.cursor : 0;
+    state.sync = { phase: state.store ? "loading" : "off", code: null };
     render();
+    refreshEntries();
   }
 
   /* ---------- tooltip ---------- */
@@ -257,8 +273,16 @@
     tipAnchor = null;
   }
 
-  /** Hover, focus and tap all open the same readout for the marks inside `container`. */
-  function attachTips(container, selector, build) {
+  /** Did the keyboard move the focus here? A click, a tap or a closing sheet do not count. */
+  function keyboardFocus(node) {
+    try { return node.matches(":focus-visible"); } catch (err) { return true; } // older browsers
+  }
+
+  /**
+   * Hover and keyboard focus open the readout of the marks inside `container`; so does
+   * a tap, unless `tapOpens` is false because a tap does something else there.
+   */
+  function attachTips(container, selector, build, tapOpens) {
     function target(event) { return event.target.closest ? event.target.closest(selector) : null; }
     container.addEventListener("pointerover", function (event) {
       var node = target(event);
@@ -269,14 +293,15 @@
     });
     container.addEventListener("focusin", function (event) {
       var node = target(event);
-      if (node) showTip(node, build(node));
+      if (node && keyboardFocus(node)) showTip(node, build(node));
     });
     container.addEventListener("focusout", hideTip);
+    if (tapOpens === false) return;
     container.addEventListener("click", function (event) {
       var node = target(event);
       if (!node) return;
       // A second tap on the same mark closes its readout. "Same" is judged by what was
-      // open when the finger went down: the tap's own focus event has already reopened it.
+      // open when the finger went down.
       if (lastPointer !== "mouse" && openAtPointerDown === node) hideTip();
       else showTip(node, build(node));
     });
@@ -363,6 +388,408 @@
     return { status: STATE_TEXT[info.state], detail: detail };
   }
 
+  /* ---------- the family's own entries ----------
+   * Anyone who can open the page can say who uses a house and when. Entries are a
+   * diary, not bookings: nothing is closed on the manager's system, and every entry
+   * says whether its nights are really blocked there.
+   */
+
+  var ME = "casecal.me";
+  var STORE_MESSAGES = {
+    offline: "Connessione assente: le modifiche non si possono leggere né salvare.",
+    token: "Il token del registro di famiglia è scaduto o è stato revocato: finché non viene rinnovato le modifiche non sono disponibili.",
+    denied: "GitHub ha rifiutato la richiesta: il token del registro di famiglia non ha più i permessi necessari, oppure il registro è stato rimosso.",
+    limit: "Troppe richieste a GitHub in poco tempo: riprova tra qualche minuto.",
+    server: "GitHub non ha risposto correttamente: riprova tra poco."
+  };
+  function storeMessage(error) { return STORE_MESSAGES[error && error.code] || STORE_MESSAGES.server; }
+
+  function browserStorage() { try { return window.localStorage; } catch (err) { return null; } }
+  function myName() { try { return localStorage.getItem(ME) || ""; } catch (err) { return ""; } }
+  function rememberName(name) { try { localStorage.setItem(ME, name); } catch (err) { /* private mode */ } }
+
+  function familyView() {
+    return JSON.stringify(L.entriesOf(state.entries).map(L.entryRecord)) + state.sync.phase + state.sync.code;
+  }
+  function focusedKey() {
+    return document.activeElement && document.activeElement.getAttribute
+      ? document.activeElement.getAttribute("data-key") : null;
+  }
+
+  var refreshing = null;
+  /** Read what has been written to the log since the page was built or last read. */
+  function refreshEntries() {
+    if (!state || !state.store) return Promise.resolve();
+    if (refreshing) return refreshing;
+    var session = state, shown = familyView();
+    refreshing = session.store.list(session.cursor).then(function (comments) {
+      return Promise.all(comments.map(function (comment) {
+        return C.decodeEvent(session.familyKey, comment.body);
+      })).then(function (events) {
+        session.entries = L.foldEvents(events.filter(Boolean), session.entries);
+        if (comments.length) session.cursor = comments[comments.length - 1].id;
+        session.sync = { phase: "ready", code: null };
+      });
+    }).catch(function (error) {
+      session.sync = { phase: "error", code: (error && error.code) || "server" };
+    }).then(function () {
+      refreshing = null;
+      // Redraw only if something changed, and never for a page that has since been locked.
+      if (state === session && familyView() !== shown) render(focusedKey());
+    });
+    return refreshing;
+  }
+
+  /** Write one change; it shows at once and is then confirmed by reading the log again. */
+  function saveEvent(event) {
+    var session = state;
+    return C.encodeEvent(session.familyKey, event).then(function (body) {
+      return session.store.append(body);
+    }).then(function () {
+      session.entries = L.foldEvents([event], session.entries);
+      session.sync = { phase: "ready", code: null };
+      if (state !== session) return;
+      render();
+      // A read already under way may have started before this write: let it finish,
+      // then read again, so that the log's own order has the last word.
+      (refreshing || Promise.resolve()).then(refreshEntries);
+    });
+  }
+
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) refreshEntries(); });
+  setInterval(function () { if (!document.hidden) refreshEntries(); }, 90000);
+
+  /* A sheet is a modal dialog laid over the page; it lives outside the redrawn area.
+   * The page may be redrawn while a sheet is open, so what opened it is remembered
+   * by key, not by node, and gets the focus back when the sheet closes. */
+  var sheet = null, sheetOpener = null;
+
+  function dropSheet() {
+    var open = sheet;
+    sheet = null;
+    sheetOpener = null;
+    if (!open) return;
+    if (open.open) open.close();
+    open.remove();
+  }
+
+  function closeSheet() {
+    var opener = sheetOpener;
+    dropSheet();
+    focusByKey(opener);
+  }
+
+  function openSheet(title, body) {
+    // A sheet opened from another one returns to where the first was opened.
+    var opener = sheet ? sheetOpener : focusedKey();
+    dropSheet();
+    hideTip();
+    var dialog = el("dialog", { class: "sheet", "aria-label": title },
+      el("div", { class: "sheet-head" }, el("h2", { text: title }),
+        el("button", { class: "btn quiet", type: "button", text: "Chiudi", onclick: closeSheet })),
+      body);
+    dialog.addEventListener("close", function () { if (sheet === dialog) closeSheet(); }); // Esc
+    dialog.addEventListener("click", function (event) { if (event.target === dialog) closeSheet(); }); // backdrop
+    document.body.appendChild(dialog);
+    sheet = dialog;
+    sheetOpener = opener;
+    dialog.showModal();
+  }
+
+  var ENTRY_STATE = {
+    blocked: { icon: "free", text: "Bloccata sul portale" },
+    pending: { icon: "warning", text: "Da bloccare sul portale" },
+    conflict: { icon: "critical", text: "Ci sono ospiti in quelle date" },
+    unknown: { icon: "unknown", text: "Non verificabile sul portale" }
+  };
+
+  function runsText(runs) {
+    return runs.map(function (run) { return shortLabel(run.start) + " → " + shortLabel(run.end); }).join(", ");
+  }
+
+  function entryStateLine(status) {
+    var look = ENTRY_STATE[status.state];
+    var extra = status.state === "pending" ? "ancora in vendita: " + runsText(status.open)
+      : status.state === "conflict" ? "da " + dayLabel(status.guests.start) + " a " + dayLabel(status.guests.end)
+      : status.state === "unknown" && status.open.length ? "il portale non pubblica ancora queste date: " + runsText(status.open)
+      : status.state === "unknown" ? "il portale di questa casa non è stato letto"
+      : "";
+    return el("p", { class: "entry-state" }, icon(look.icon),
+      el("span", null, el("strong", { text: look.text }), extra ? el("span", { class: "sub", text: extra }) : null));
+  }
+
+  function entryItem(entry, prop) {
+    return el("li", { class: "entry" },
+      el("div", { class: "entry-who" }, el("strong", { text: entry.who }),
+        entry.by ? el("span", { class: "sub", text: "segnato da " + entry.by }) : null),
+      el("div", { class: "entry-dates", text: dayLabel(entry.start) + " → " + dayLabel(entry.end) +
+        " · " + nights(entry.end - entry.start) }),
+      entry.note ? el("div", { class: "entry-note", text: entry.note }) : null,
+      entryStateLine(L.entryStatus(entry, prop)),
+      state.store ? el("button", {
+        class: "btn", type: "button", "data-key": "entry:" + entry.id, text: "Modifica",
+        onclick: function () { entrySheet(entry, null); }
+      }) : null);
+  }
+
+  function houseById(id) {
+    return state.props.filter(function (prop) { return prop.id === id; })[0] || null;
+  }
+
+  function field(id, labelText, control) {
+    return el("div", { class: "field" }, el("label", { for: id, text: labelText }), control);
+  }
+
+  /** The form that adds an entry (`entry` null, `draft` gives house and dates) or changes one. */
+  function entrySheet(entry, draft) {
+    var start = entry || draft;
+    // Every house, also one whose portal could not be read: the diary does not depend on it.
+    var house = el("select", { class: "input", id: "entry-house" }, state.props.map(function (prop) {
+      var option = el("option", { value: prop.id, text: prop.label });
+      option.selected = prop.id === start.prop;
+      return option;
+    }));
+    var from = el("input", {
+      class: "input", id: "entry-from", type: "date", required: true, min: "2000-01-01", max: "2099-12-31",
+      value: L.ymd(start.start)
+    });
+    var to = el("input", {
+      class: "input", id: "entry-to", type: "date", required: true, min: "2000-01-02", max: "2100-01-01",
+      value: L.ymd(start.end)
+    });
+    var known = {};
+    L.entriesOf(state.entries).forEach(function (other) { known[other.who] = true; });
+    var who = el("input", {
+      class: "input", id: "entry-who", type: "text", maxlength: "80", required: true, autocomplete: "off",
+      list: "entry-people", value: entry ? entry.who : "", placeholder: "Es. Marco e Giulia"
+    });
+    var note = el("input", {
+      class: "input", id: "entry-note", type: "text", maxlength: "200", autocomplete: "off",
+      value: entry ? entry.note : ""
+    });
+    var me = el("input", {
+      class: "input", id: "entry-me", type: "text", maxlength: "40", required: true, autocomplete: "given-name",
+      value: myName()
+    });
+    var preview = el("p", { class: "preview", "aria-live": "polite" });
+    var error = el("p", { class: "error", role: "alert", hidden: true });
+    var submit = el("button", { class: "btn primary", type: "submit", text: entry ? "Salva le modifiche" : "Salva" });
+    var remove = entry ? el("button", { class: "btn danger", type: "button", text: "Elimina" }) : null;
+
+    function candidate() {
+      return {
+        id: entry ? entry.id : null, prop: house.value, who: who.value,
+        start: from.value ? L.dayFromYmd(from.value) : NaN, end: to.value ? L.dayFromYmd(to.value) : NaN
+      };
+    }
+    function explain(check) {
+      if (check.code === "who") return "Scrivi chi usa la casa.";
+      if (check.code === "dates") return "Controlla le date: il check-out deve essere dopo il check-in.";
+      if (check.code === "long") {
+        return "Un periodo può durare al massimo " + L.MAX_NIGHTS + " notti: per un uso più lungo inserisci più periodi.";
+      }
+      if (check.code === "guests") {
+        return "In quelle date ci sono ospiti (da " + dayLabel(check.detail.start) + " a " + dayLabel(check.detail.end) + "): scegli altre date.";
+      }
+      if (check.code === "overlap") {
+        return "C'è già un periodo in quelle date: " + check.detail.who + ", da " +
+          dayLabel(check.detail.start) + " a " + dayLabel(check.detail.end) + ".";
+      }
+      return "Scegli una casa.";
+    }
+    function refreshPreview() {
+      clear(preview);
+      var asked = candidate(), prop = houseById(asked.prop);
+      if (!prop || isNaN(asked.start) || isNaN(asked.end)) return;
+      // The name is checked on saving, not while the dates are being chosen.
+      var check = L.checkEntry(Object.assign({}, asked, { who: asked.who.trim() || "-" }), state.props, state.entries);
+      if (!check.ok) {
+        append(preview, [icon("critical"), el("span", { text: explain(check) })]);
+        return;
+      }
+      var status = L.entryStatus(asked, prop);
+      var when = "Dalle " + prop.hours.checkIn + " di " + dayLabel(asked.start) + " alle " + prop.hours.checkOut +
+        " di " + dayLabel(asked.end) + ", " + nights(asked.end - asked.start) + ". ";
+      if (status.state === "blocked") {
+        append(preview, [icon("free"), el("span", null, when,
+          el("strong", { text: "Date già bloccate sul portale:" }), " nessun ospite può prenotarle.")]);
+      } else if (status.state === "unknown") {
+        append(preview, [icon("unknown"), el("span", null, when,
+          el("strong", { text: "Non verificabile:" }), status.open.length
+            ? " il portale non pubblica ancora queste date (" + runsText(status.open) + "). Vanno controllate lì."
+            : " il portale di questa casa non è stato letto. Le date vanno controllate lì.")]);
+      } else {
+        append(preview, [icon("warning"), el("span", null, when,
+          el("strong", { text: "Date non ancora bloccate sul portale" }),
+          " (" + runsText(status.open) + "): finché non vengono chiuse lì, gli ospiti possono prenotarle.")]);
+      }
+    }
+    function busy(on) {
+      submit.disabled = on;
+      if (remove) remove.disabled = on;
+    }
+    function fail(problem) {
+      busy(false);
+      showError(error, storeMessage(problem));
+    }
+    function stampNow() { return new Date().toISOString().replace(/\.\d+Z$/, "Z"); }
+
+    from.addEventListener("change", function () {
+      // Moving the check-in past the check-out keeps at least one night.
+      var asked = candidate();
+      if (!isNaN(asked.start) && !(asked.end > asked.start)) to.value = L.ymd(asked.start + 1);
+    });
+    [house, from, to].forEach(function (control) { control.addEventListener("change", refreshPreview); });
+    [from, to].forEach(function (control) { control.addEventListener("input", refreshPreview); });
+
+    var form = el("form", { class: "sheet-body form", novalidate: true },
+      field("entry-house", "Casa", house),
+      el("div", { class: "pair" }, field("entry-from", "Check-in", from), field("entry-to", "Check-out", to)),
+      preview,
+      field("entry-who", "Chi usa la casa", who),
+      el("datalist", { id: "entry-people" }, Object.keys(known).sort().map(function (name) {
+        return el("option", { value: name });
+      })),
+      field("entry-note", "Nota (facoltativa)", note),
+      field("entry-me", "Il tuo nome", me),
+      el("p", { class: "hint", text: "È un promemoria per la famiglia: non chiude le date sul portale del gestore." }),
+      error,
+      el("div", { class: "sheet-actions" }, submit, remove));
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      showError(error, "");
+      var asked = candidate();
+      var check = L.checkEntry(asked, state.props, state.entries);
+      if (!check.ok) { showError(error, explain(check)); return; }
+      var author = me.value.trim();
+      if (!author) { showError(error, "Scrivi il tuo nome: serve agli altri per sapere chi ha segnato il periodo."); me.focus(); return; }
+      // Only what the readers of the log accept is ever written to it.
+      var record = L.validEntry({
+        id: asked.id || L.entryId(crypto.getRandomValues(new Uint8Array(12))), prop: asked.prop,
+        start: L.ymd(asked.start), end: L.ymd(asked.end),
+        who: who.value, note: note.value, by: author, at: stampNow()
+      });
+      if (!record) { showError(error, "Controlla i dati inseriti: nomi e nota non possono superare la lunghezza indicata."); return; }
+      rememberName(author);
+      busy(true);
+      saveEvent(Object.assign({ t: "set" }, L.entryRecord(record))).then(done, fail);
+    });
+
+    if (remove) {
+      remove.addEventListener("click", function () {
+        if (!remove.classList.contains("armed")) { // a second click confirms
+          remove.classList.add("armed");
+          remove.textContent = "Conferma eliminazione";
+          return;
+        }
+        busy(true);
+        saveEvent({ t: "del", id: entry.id, by: me.value.trim(), at: stampNow() }).then(done, fail);
+      });
+    }
+
+    openSheet(entry ? "Modifica periodo" : "Chi usa la casa", form);
+    var mine = sheet;
+    // Saved: close this sheet, unless it was closed meanwhile and another one is open.
+    function done() { if (sheet === mine) closeSheet(); }
+    refreshPreview();
+    (entry ? submit : who).focus();
+  }
+
+  /** Everything about one day, with the ways to change it. */
+  function daySheet(day, props) {
+    var body = el("div", { class: "sheet-body" }, props.map(function (prop) {
+      var words = describe(prop, day), info = L.dayInfo(prop, day);
+      var touching = L.entriesOf(state.entries, prop.id).filter(function (entry) {
+        return entry.start <= day && day <= entry.end;
+      });
+      var taken = touching.some(function (entry) { return day < entry.end; });
+      var canAdd = state.store && !taken && (info.state === "free" || info.state === "closed");
+      return el("div", { class: "sheet-house p" + prop.index },
+        el("div", { class: "house-head" }, el("b", { class: "tag", text: prop.badge }), el("h3", { text: prop.label })),
+        el("p", { class: "now" }, icon(info.state),
+          el("span", null, el("strong", { text: words.status }), words.detail ? " · " + words.detail : "")),
+        touching.length ? el("ul", { class: "entries" }, touching.map(function (entry) { return entryItem(entry, prop); })) : null,
+        canAdd ? el("button", {
+          class: "btn", type: "button",
+          text: info.state === "closed" ? "Segna chi la usa" : "Segna un periodo da questo giorno",
+          onclick: function () { entrySheet(null, L.draftPeriod(prop, day, state.entries)); }
+        }) : null);
+    }));
+    openSheet(F.long.format(dateOf(day)), body);
+  }
+
+  function syncLine() {
+    if (!state.store) return el("p", { class: "hint", text: "Le modifiche non sono attive su questa pagina." });
+    if (state.store.kind === "local") {
+      return el("p", { class: "hint", text: "Versione dimostrativa: le modifiche restano su questo dispositivo." });
+    }
+    if (state.sync.phase === "error") {
+      return el("p", { class: "now" }, icon("warning"), el("span", null,
+        el("strong", { text: "Modifiche recenti non lette." }), " " + STORE_MESSAGES[state.sync.code] + " ",
+        el("button", { class: "btn quiet", type: "button", "data-key": "sync-retry", text: "Riprova", onclick: refreshEntries })));
+    }
+    return el("p", { class: "hint", text: state.sync.phase === "ready"
+      ? "Aggiornato con le modifiche di tutti." : "Lettura delle modifiche…" });
+  }
+
+  /** Who uses each house: the list everyone can add to and change. */
+  function familySection() {
+    var props = visible(); // also a house whose portal could not be read: its notes are still there
+    if (!props.length) return null;
+    var groups = props.map(function (prop) {
+      return { prop: prop, entries: L.entriesOf(state.entries, prop.id).filter(function (entry) { return entry.end > state.today; }) };
+    });
+    var any = groups.some(function (group) { return group.entries.length; });
+    if (!state.store && !any) return null; // a read-only page with nothing to show
+    var first = readable()[0] || props[0];
+    return el("section", { class: "card people" },
+      el("div", { class: "section-head" }, el("h2", { text: "Chi usa la casa" }),
+        state.store ? el("button", {
+          class: "btn primary", type: "button", "data-key": "family-add", text: "Aggiungi un periodo",
+          onclick: function () {
+            entrySheet(null, L.draftPeriod(first, L.firstOpenDay(first, state.today, state.entries), state.entries));
+          }
+        }) : null),
+      el("p", { class: "hint", text: "Segna quando usi una casa, così lo sanno tutti. È un promemoria: per impedire le prenotazioni degli ospiti le date vanno chiuse sul portale del gestore, e ogni periodo indica se lo sono già." }),
+      syncLine(),
+      el("div", { class: "stays" }, groups.map(function (group) {
+        return el("div", { class: "p" + group.prop.index },
+          el("h3", null, el("i", { class: "swatch" }), group.prop.label),
+          group.entries.length
+            ? el("ul", { class: "entries" }, group.entries.map(function (entry) { return entryItem(entry, group.prop); }))
+            : el("p", { class: "empty", text: "Nessun periodo inserito." }));
+      })));
+  }
+
+  /** For the owner: the nights family members are counting on that are not known to be closed. */
+  function closingList(props, byId) {
+    var groups = props.map(function (prop) {
+      var open = [];
+      L.entriesOf(state.entries, prop.id).forEach(function (entry) {
+        if (entry.end <= state.today) return;
+        var status = L.entryStatus(entry, prop);
+        if (status.state !== "conflict" && status.open.length) open.push({ entry: entry, status: status });
+      });
+      return { prop: prop, open: open };
+    }).filter(function (group) { return group.open.length; });
+    if (!groups.length) return null;
+    return el("div", { class: "todo" },
+      el("h3", null, icon("warning"), "Da chiudere sul portale del gestore"),
+      groups.map(function (group) {
+        var url = byId[group.prop.id] && byId[group.prop.id].portal_url;
+        return el("div", { class: "p" + group.prop.index },
+          el("h4", null, el("i", { class: "swatch" }), group.prop.label),
+          el("ul", { class: "plain" }, group.open.map(function (item) {
+            return el("li", { text: runsText(item.status.open) + " · " + item.entry.who +
+              (item.status.state === "unknown" ? " · da verificare: il portale non pubblica ancora queste date" : "") });
+          })),
+          typeof url === "string" && url.indexOf("https://") === 0
+            ? el("a", { class: "btn", href: url, target: "_blank", rel: "noopener noreferrer", text: "Apri il portale di " + group.prop.label })
+            : null);
+      }));
+  }
+
   /* ---------- sections ---------- */
 
   function header() {
@@ -446,6 +873,15 @@
       return card;
     }
     append(card, nowLine(prop));
+    var unsettled = L.entriesOf(state.entries, prop.id).filter(function (entry) {
+      var kind = L.entryStatus(entry, prop).state;
+      return entry.end > state.today && (kind === "pending" || kind === "conflict");
+    }).length;
+    if (unsettled) {
+      append(card, el("p", { class: "now" }, icon("warning"), el("span", null,
+        el("strong", { text: unsettled === 1 ? "1 periodo di famiglia non ancora bloccato" : unsettled + " periodi di famiglia non ancora bloccati" }),
+        " · vedi «Chi usa la casa»")));
+    }
     append(card, el("h4", { text: "Prossimi periodi liberi" }));
     var windows = L.freeWindows(prop, state.today);
     if (!windows.length) {
@@ -537,17 +973,31 @@
         }),
         el("span", null, el("i", { class: "chip solid" }), "Ospiti"),
         el("span", null, el("i", { class: "chip pale" }), "Bloccata (chiusa alla vendita, senza ospiti)"),
+        el("span", null, el("i", { class: "chip mid" }), "Uso famiglia"),
+        el("span", null, el("i", { class: "chip dashed" }), "Uso famiglia non ancora bloccato"),
         el("span", null, el("i", { class: "chip none" }), "Libera")),
       el("div", { class: "hours" }, art, el("p", null, words)));
   }
 
+  /** Who in the family has the house on the night of `day`, in words; "" if nobody. */
+  function familyWords(prop, day) {
+    return L.entriesOf(state.entries, prop.id).filter(function (entry) {
+      return entry.start <= day && day < entry.end;
+    }).map(function (entry) {
+      var kind = L.entryStatus(entry, prop).state;
+      return "Uso famiglia: " + entry.who + (kind === "pending" ? " (da bloccare sul portale)"
+        : kind === "conflict" ? " (ci sono ospiti)" : kind === "unknown" ? " (non verificabile sul portale)" : "");
+    }).join("; ");
+  }
+
   function dayTip(day, props) {
     return [el("div", { class: "tip-title", text: F.long.format(dateOf(day)) })].concat(props.map(function (prop) {
-      var words = describe(prop, day);
+      var words = describe(prop, day), family = familyWords(prop, day);
       return el("div", { class: "tip-row p" + prop.index },
         el("i", { class: "key" }),
         el("span", null, el("strong", { text: words.status }), el("span", { class: "who", text: " · " + prop.label })),
-        words.detail ? el("span", { class: "detail", text: words.detail }) : null);
+        words.detail ? el("span", { class: "detail", text: words.detail }) : null,
+        family ? el("span", { class: "detail fam", text: family }) : null);
     }));
   }
 
@@ -568,11 +1018,12 @@
       var cells = el("div", { class: "cells" }, week.map(function (day, column) {
         if (day === null) return el("span", { class: "pad" });
         var spoken = F.long.format(dateOf(day)) + ". " + props.map(function (prop) {
-          var words = describe(prop, day);
-          return prop.label + ": " + words.status + (words.detail ? ", " + words.detail : "");
+          var words = describe(prop, day), family = familyWords(prop, day);
+          return prop.label + ": " + words.status + (words.detail ? ", " + words.detail : "") + (family ? ". " + family : "");
         }).join(". ") + ".";
         return el("button", {
-          type: "button", "data-day": String(day), tabindex: day === focusDay ? "0" : "-1", "aria-label": spoken,
+          type: "button", "data-day": String(day), "data-key": "day:" + day,
+          tabindex: day === focusDay ? "0" : "-1", "aria-label": spoken,
           class: "day" + (column >= 5 ? " we" : "") + (day < state.today ? " past" : "") + (day === state.today ? " today" : "")
         }, el("span", { class: "n", text: String(L.parts(day).d) }));
       }));
@@ -588,37 +1039,74 @@
           bar.labels = barLabels(stay);
           place(bar, segment.left, segment.right, 7);
           return bar;
-        }));
+        }), familyBars(prop, week));
       }));
       block.appendChild(el("div", { class: "week" }, cells, lanes));
     });
     return block;
   }
 
+  /** The family's periods of one house in one week row; they sit over the bars beneath. */
+  function familyBars(prop, week) {
+    var periods = L.entriesOf(state.entries, prop.id).map(function (entry) {
+      return { start: entry.start, end: entry.end, kind: "family", entry: entry };
+    });
+    return L.weekSegments(periods, week, prop.hours.inAt, prop.hours.outAt).map(function (segment) {
+      var entry = segment.stay.entry, kind = L.entryStatus(entry, prop).state;
+      var bar = el("div", {
+        class: "bar family " + kind + (segment.cutLeft ? " cut-l" : "") + (segment.cutRight ? " cut-r" : "") +
+          (entry.end <= state.today ? " past" : ""),
+        "data-stay": "family:" + entry.id, "data-from": String(entry.start), "data-to": String(entry.end)
+      }, el("b", { class: "tag", text: prop.badge }), el("span", { class: "txt" }));
+      bar.labels = kind === "pending" ? [entry.who + " · da bloccare", entry.who]
+        : kind === "conflict" ? [entry.who + " · ci sono ospiti", entry.who] : [entry.who];
+      place(bar, segment.left, segment.right, 7);
+      return bar;
+    });
+  }
+
   /**
    * Write a label inside each stay's bar, but only where it really fits: text is
    * measured against the bar, never clipped. A stay drawn over several rows gets its
    * label once, on the first piece wide enough; a piece too short even for the
-   * house's initial shows the bare bar.
+   * house's initial shows the bare bar. A family period is drawn over the manager's
+   * bars, so those are labelled only in the part left in view before it.
    */
   function fitLabels() {
     var placed = {};
-    var bars = root.querySelectorAll(".months .bar");
-    for (var i = 0; i < bars.length; i++) {
-      var bar = bars[i], tag = bar.firstChild, text = bar.lastChild;
-      text.textContent = "";
-      tag.hidden = false;
-      var room = bar.getBoundingClientRect();
-      var padding = parseFloat(getComputedStyle(bar).paddingRight) || 0;
-      if (tag.getBoundingClientRect().right > room.right - 2) { tag.hidden = true; continue; }
-      var stayKey = bar.getAttribute("data-stay");
-      if (placed[stayKey]) continue;
-      var labels = bar.labels || [];
-      for (var j = 0; j < labels.length; j++) {
-        text.textContent = labels[j];
-        if (text.getBoundingClientRect().right <= room.right - padding) { placed[stayKey] = true; break; }
-        text.textContent = "";
+    var lanes = root.querySelectorAll(".months .lane");
+    for (var l = 0; l < lanes.length; l++) {
+      var bars = lanes[l].children, covers = [];
+      for (var c = 0; c < bars.length; c++) {
+        if (bars[c].classList.contains("family")) covers.push(bars[c].getBoundingClientRect());
       }
+      for (var i = 0; i < bars.length; i++) fitLabel(bars[i], covers, placed);
+    }
+  }
+
+  function fitLabel(bar, covers, placed) {
+    var tag = bar.firstChild, text = bar.lastChild;
+    text.textContent = "";
+    tag.hidden = false;
+    var room = bar.getBoundingClientRect();
+    var limit = room.right, startCovered = false;
+    if (!bar.classList.contains("family")) {
+      covers.forEach(function (cover) {
+        if (cover.right <= room.left || cover.left >= room.right) return;
+        if (cover.left <= room.left + 1) startCovered = true;
+        else limit = Math.min(limit, cover.left);
+      });
+    }
+    if (startCovered || tag.getBoundingClientRect().right > limit - 2) { tag.hidden = true; return; }
+    var stayKey = bar.getAttribute("data-stay");
+    if (placed[stayKey]) return;
+    // Up to its own end a bar keeps its padding; up to a period drawn over it, a small gap.
+    var padding = limit < room.right ? 3 : (parseFloat(getComputedStyle(bar).paddingRight) || 0);
+    var labels = bar.labels || [];
+    for (var j = 0; j < labels.length; j++) {
+      text.textContent = labels[j];
+      if (text.getBoundingClientRect().right <= limit - padding) { placed[stayKey] = true; break; }
+      text.textContent = "";
     }
   }
 
@@ -638,6 +1126,9 @@
       return section;
     }
     append(section, calendarKey(props));
+    append(section, el("p", { class: "hint tap", text: state.store
+      ? "Tocca un giorno per i dettagli o per segnare chi usa la casa."
+      : "Tocca un giorno per i dettagli." }));
     var today = L.parts(state.today);
     var to = Math.max.apply(null, props.map(function (prop) { return prop.to; }));
     var from = state.showPast ? Math.min.apply(null, props.map(function (prop) { return prop.from; }))
@@ -650,7 +1141,11 @@
     grid.style.setProperty("--lane-h", laneHeight + "px");
     grid.style.setProperty("--lanes-h", (props.length * laneHeight + (props.length - 1) * GAP) + "px");
 
-    attachTips(grid, ".day", function (node) { return dayTip(Number(node.getAttribute("data-day")), props); });
+    attachTips(grid, ".day", function (node) { return dayTip(Number(node.getAttribute("data-day")), props); }, false);
+    grid.addEventListener("click", function (event) {
+      var node = event.target.closest ? event.target.closest(".day") : null;
+      if (node) daySheet(Number(node.getAttribute("data-day")), props);
+    });
     grid.addEventListener("keydown", function (event) {
       var step = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[event.key];
       var current = event.target.closest ? event.target.closest(".day") : null;
@@ -928,6 +1423,7 @@
           render();
         }
       })));
+    append(section, closingList(scoped, byId));
     if (!years.length) {
       append(section, el("p", { class: "empty", text: "Nessun dato economico disponibile per le case selezionate." }));
       return section;
@@ -970,13 +1466,27 @@
     hideTip();
     clear(root);
     root.appendChild(el("div", { class: "shell" },
-      header(), banners(), filterBar(), availability(), calendar(), staysSection(), ownerSection(), footer()));
+      header(), banners(), filterBar(), availability(), calendar(), familySection(), staysSection(), ownerSection(), footer()));
     window.scrollTo(0, scroll);
     fitLabels();
-    if (!focusKey) return;
+    // Not while a sheet is open: the focus belongs inside it, and it will ask for it back.
+    if (!sheet) focusByKey(focusKey);
+  }
+
+  /** Give the focus to the control with this key in the page as it is drawn now. */
+  function focusByKey(key) {
+    if (!key) return;
     var marked = root.querySelectorAll("[data-key]");
     for (var i = 0; i < marked.length; i++) {
-      if (marked[i].getAttribute("data-key") === focusKey) { marked[i].focus({ preventScroll: true }); break; }
+      var node = marked[i];
+      if (node.getAttribute("data-key") !== key) continue;
+      if (node.classList.contains("day")) { // the calendar is one tab stop: move it here
+        var stop = root.querySelector('.months .day[tabindex="0"]');
+        if (stop) stop.tabIndex = -1;
+        node.tabIndex = 0;
+      }
+      node.focus({ preventScroll: true });
+      return;
     }
   }
 

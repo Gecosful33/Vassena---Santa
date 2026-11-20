@@ -89,11 +89,15 @@ button, input { font: inherit; color: inherit; }
   min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--surface-1); color: var(--text-primary); font-size: 14px; font-weight: 500;
   cursor: pointer; text-decoration: none; white-space: nowrap;
+  /* The pressed state below replaces the browser's own flash, which would otherwise
+     be painted over a sheet that the tap has just opened. */
+  -webkit-tap-highlight-color: transparent;
 }
-.btn:hover { background: var(--surface-2); }
+.btn:hover, .btn:active { background: var(--surface-2); }
 .btn[disabled] { opacity: 0.6; cursor: progress; }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
 .btn.primary:hover { filter: brightness(1.07); }
+.btn.primary:active { filter: brightness(0.93); }
 .btn.quiet { border-color: transparent; background: none; color: var(--text-secondary); padding: 0 8px; }
 .btn.quiet:hover { background: var(--surface-2); color: var(--text-primary); }
 
@@ -203,6 +207,9 @@ button, input { font: inherit; color: inherit; }
 .chip.solid { background: var(--text-secondary); }
 .chip.pale { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--axis); }
 .chip.none { box-shadow: inset 0 0 0 1px var(--axis); }
+.chip.mid { background: var(--text-muted); }
+.chip.dashed { outline: 2px dashed var(--text-muted); outline-offset: -2px; }
+.hint.tap { margin-top: 12px; }
 
 .key { display: grid; gap: 12px; }
 .hours { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
@@ -252,6 +259,15 @@ button, input { font: inherit; color: inherit; }
 .bar.booking .tag { background: rgba(255, 255, 255, 0.94); color: #0b0b0b; }
 .bar.closed { background: var(--surface-3); background: color-mix(in srgb, var(--hue) 26%, #ffffff); color: #3d3c3a; }
 .bar.closed .tag { background: var(--hue); color: #ffffff; }
+/* The family's own periods sit over the manager's bars: a mid tint when the nights are
+   really blocked on the portal, a dashed outline while they are still for sale. */
+.bar.family { z-index: 1; background: color-mix(in srgb, var(--hue) 55%, #ffffff); color: #0b0b0b; }
+.bar.family .tag { background: rgba(255, 255, 255, 0.94); color: #0b0b0b; }
+.bar.family.pending, .bar.family.unknown, .bar.family.conflict {
+  background: var(--surface-1); color: var(--text-primary); outline: 2px dashed var(--hue); outline-offset: -2px;
+}
+.bar.family.conflict { outline: 2px solid var(--critical); }
+.bar.family.pending .tag, .bar.family.unknown .tag, .bar.family.conflict .tag { background: var(--hue); color: #ffffff; }
 .bar.cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 4px; }
 .bar.cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .bar.past { opacity: 0.45; }
@@ -259,6 +275,8 @@ button, input { font: inherit; color: inherit; }
 .single .bar { font-size: 12px; padding-left: 3px; }
 @media (prefers-color-scheme: dark) {
   .bar.closed { background: var(--surface-3); background: color-mix(in srgb, var(--hue) 38%, #1a1a19); color: #dddcd4; }
+  .bar.family { background: color-mix(in srgb, var(--hue) 62%, #1a1a19); color: #ffffff; }
+  .bar.family.pending, .bar.family.unknown, .bar.family.conflict { background: var(--surface-1); color: var(--text-primary); }
 }
 
 .tip {
@@ -273,6 +291,60 @@ button, input { font: inherit; color: inherit; }
 .tip-row strong { font-weight: 650; }
 .tip-row .who { color: var(--text-secondary); }
 .tip-row .detail { grid-column: 2; color: var(--text-secondary); font-size: 12px; }
+.tip-row .fam { color: var(--text-primary); }
+
+/* ---------- the family's entries ---------- */
+.entries { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+.entry { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--surface-2); justify-items: start; }
+.entry-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 15px; }
+.entry-who .sub, .entry-state .sub { color: var(--text-muted); font-size: 12px; }
+.entry-dates { font-size: 14px; font-variant-numeric: tabular-nums; }
+.entry-note { font-size: 13px; color: var(--text-secondary); }
+.entry-state { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; }
+.entry-state .ico { margin-top: 1px; }
+.entry-state .sub { display: block; }
+.entry .btn { margin-top: 4px; min-height: 36px; }
+.people .now { margin: 8px 0 0; font-size: 14px; }
+.people .hint + .hint, .people .hint + .now { margin-top: 6px; }
+.todo { display: grid; gap: 10px; padding: 12px; margin-bottom: 14px; border-radius: 12px; background: var(--surface-2); }
+.todo h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
+.todo h4 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+.todo .btn { margin-top: 8px; }
+.plain { list-style: none; margin: 4px 0 0; padding: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* ---------- sheets (day details, entry form) ---------- */
+.sheet {
+  width: min(520px, calc(100vw - 24px)); max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
+  padding: 0; border: 0; border-radius: 16px; background: var(--surface-1); color: var(--text-primary);
+  box-shadow: var(--shadow); overflow: auto;
+}
+.sheet::backdrop { background: rgba(11, 11, 11, 0.5); }
+.sheet-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px 10px; background: var(--surface-1);
+}
+.sheet-head h2 { font-size: 17px; font-weight: 650; }
+.sheet-head h2::first-letter { text-transform: uppercase; }
+.sheet-body { display: grid; gap: 16px; padding: 4px 16px 18px; }
+.sheet-house { display: grid; gap: 8px; justify-items: start; }
+.sheet-house .house-head .tag { min-width: 20px; height: 20px; font-size: 11px; background: var(--hue); color: #ffffff; }
+.sheet-house .now { margin-top: 0; }
+.sheet-house .entries { width: 100%; margin-top: 0; }
+.sheet-house + .sheet-house { padding-top: 16px; border-top: 1px solid var(--grid); }
+.form { gap: 14px; }
+/* Side by side where two date fields fit, one under the other on a phone: a date field
+   has a width of its own that it will not go below. */
+.form .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 12px; }
+.form .input { min-width: 0; }
+.form select.input { appearance: auto; }
+.preview { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text-secondary); }
+.preview:empty { display: none; }
+.preview strong { color: var(--text-primary); font-weight: 650; }
+.preview .ico { margin-top: 1px; }
+.sheet-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.sheet-actions .primary { flex: 1 1 auto; min-height: 44px; }
+.btn.danger { color: var(--critical); }
+.btn.danger.armed { background: var(--critical); border-color: transparent; color: #ffffff; }
 
 /* ---------- stays ---------- */
 .stays { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }

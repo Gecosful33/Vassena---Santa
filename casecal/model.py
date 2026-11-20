@@ -274,6 +274,8 @@ class PropertySnapshot:
     # House rules (HH:MM): they come from the configuration, not from the portal.
     check_in_time: str = "15:00"
     check_out_time: str = "11:00"
+    # The page of the manager's portal where the owner closes dates (owner tier only).
+    portal_url: str | None = None
     # Non-fatal problems met while reading this house (safe to log); never published.
     warnings: list[str] = field(default_factory=list, compare=False)
 
@@ -329,6 +331,7 @@ class PropertySnapshot:
     def owner_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
+            "portal_url": self.portal_url,
             "kpi_columns": list(self.kpi_columns),
             "kpi_roles": dict(self.kpi_roles),
             "kpis": [kpi.to_dict() for kpi in self.kpis],
@@ -353,6 +356,7 @@ class PropertySnapshot:
             stays=[Stay.from_row(row) for row in family["stays"]],
             check_in_time=family.get("check_in", "15:00"),
             check_out_time=family.get("check_out", "11:00"),
+            portal_url=owner.get("portal_url"),
             kpi_columns=tuple(owner.get("kpi_columns", ())),
             kpi_roles=dict(owner.get("kpi_roles", {})),
             kpis=[MonthKpi.from_dict(raw) for raw in owner.get("kpis", [])],
@@ -391,6 +395,10 @@ class Snapshot:
     timezone: str = "Europe/Rome"
     note: str | None = None
     demo: bool = False
+    # The family's own layer (see family.py): who uses a house when, and how the
+    # page reaches the log where those entries are written. None = read-only page.
+    entries: list[Any] = field(default_factory=list)
+    log: dict[str, Any] | None = None
 
     def family_payload(self) -> dict[str, Any]:
         return {
@@ -401,6 +409,8 @@ class Snapshot:
             "note": self.note,
             "demo": self.demo,
             "properties": [prop.family_dict() for prop in self.properties],
+            "entries": [entry.to_dict() for entry in self.entries],
+            "log": self.log,
         }
 
     def owner_payload(self) -> dict[str, Any]:

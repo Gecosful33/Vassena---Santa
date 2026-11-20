@@ -189,6 +189,22 @@ def test_the_owner_payload_carries_the_economics_in_cents():
     assert house["reservations"][1] == ["2026-08-07", "2026-08-10", "Airbnb", 4, [124761, 52017]]
 
 
+def test_the_portal_link_is_for_the_owner_only():
+    linked = snapshot(portal_url="https://portal.example/gestore/property/details/id/7")
+    published = Snapshot(generated_at=NOW, properties=[linked])
+    assert published.owner_payload()["properties"][0]["portal_url"] == linked.portal_url
+    assert "portal.example" not in repr(published.family_payload())  # it names the manager
+    restored = properties_from_payloads(published.family_payload(), published.owner_payload())["santa"]
+    assert restored.portal_url == linked.portal_url
+    assert properties_from_payloads(published.family_payload(), None)["santa"].portal_url is None
+
+
+def test_the_family_layer_travels_in_the_family_payload():
+    plain = Snapshot(generated_at=NOW, properties=[snapshot()])
+    assert plain.family_payload()["entries"] == [] and plain.family_payload()["log"] is None
+    assert set(plain.owner_payload()) == {"v", "properties"}  # nothing of it in the owner tier
+
+
 def test_published_payloads_restore_the_same_snapshot():
     original = snapshot()
     published = Snapshot(generated_at=NOW, properties=[original, MissingProperty("vassena", "Vassena")])

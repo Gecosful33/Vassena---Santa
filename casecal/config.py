@@ -22,6 +22,11 @@ _CLOCK_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
 DEFAULT_CHECK_IN = "15:00"
 DEFAULT_CHECK_OUT = "11:00"
 
+# Secrets the program can do without. FAMILY_LOG_TOKEN turns on the family's own
+# entries (without it the page is read-only); OLD_FAMILY_PASSPHRASE is set for one
+# run after the family passphrase has been changed, to carry those entries over.
+OPTIONAL_SECRETS = ("FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE")
+
 
 class ConfigError(ValueError):
     """The configuration file or the environment is incomplete."""

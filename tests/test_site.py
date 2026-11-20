@@ -63,8 +63,9 @@ def test_the_csp_pins_exactly_the_inlined_code(built):
     assert f"style-src '{_sha256(style)}'" in csp
     assert "default-src 'none'" in csp
     assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
-    # default-src 'none' with no connect-src: the page cannot send anything anywhere.
-    assert "connect-src" not in csp
+    # The family's entries live on GitHub as ciphertext: that API is the only host allowed.
+    assert "connect-src https://api.github.com;" in csp
+    assert csp.count("https://") == 1
 
 
 def test_the_page_loads_nothing_from_the_network(built):

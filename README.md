@@ -5,8 +5,12 @@ proprietari dei gestori (Krossbooking) e pubblicato come pagina web cifrata.
 
 - **La famiglia** apre la pagina con una password e vede, per ogni casa, quando ci sono
   ospiti, quando le date sono bloccate e quando è libera.
+- **Chiunque della famiglia** può segnare dalla pagina chi usa una casa e quando, e
+  correggere o togliere quanto già segnato: lo vedono subito tutti, e per ogni periodo
+  la pagina dice se quelle date sono davvero bloccate sul portale del gestore.
 - **La proprietà** ha una seconda password che sblocca anche ricavi, commissioni e
-  netto, mese per mese e prenotazione per prenotazione.
+  netto, mese per mese e prenotazione per prenotazione, e l'elenco delle date che la
+  famiglia conta di usare ma che sono ancora in vendita.
 
 La pagina è raggiungibile da chiunque, ma contiene solo testo cifrato: senza password
 non si legge nulla, nemmeno i nomi delle case.
@@ -18,11 +22,20 @@ ogni notte (GitHub Actions, 02:17 UTC)
   └─ per ogni casa: login al portale → statistiche dell'anno in corso e del successivo
      → elenco prenotazioni → logout
   └─ controlli di coerenza (vedi sotto)
+  └─ rilettura delle voci inserite dalla famiglia (registro cifrato, vedi sotto)
   └─ cifratura a due livelli → una sola pagina HTML → GitHub Pages
+
+durante il giorno (nel browser di chi apre la pagina)
+  └─ lettura delle voci inserite dopo l'ultimo aggiornamento notturno
+  └─ ogni inserimento, modifica o eliminazione → una riga cifrata nel registro
 ```
 
 È uno script deterministico, non un agente: nessun modello di linguaggio gira di
-notte. Nel repository non viene scritto alcun dato; la pagina è un artefatto di deploy.
+notte. Nel repository non viene scritto alcun dato: la pagina è un artefatto di deploy
+e il registro di famiglia sta nei commenti di una issue.
+
+Sui portali dei gestori il programma **legge soltanto**. Segnare un periodo nella
+pagina non chiude nessuna data: è un promemoria condiviso.
 
 ## Messa in funzione
 
@@ -69,12 +82,42 @@ compare nel riepilogo del job (`https://<utente>.github.io/<repository>/`).
 Indirizzo e password di famiglia a chi deve vedere il calendario. La password della
 proprietà solo a chi deve vedere i conti.
 
+### 6. Attivare «Chi usa la casa» (facoltativo)
+
+Senza questo passo la pagina funziona in sola lettura. Per permettere alla famiglia di
+segnare i propri periodi serve un token GitHub che la pagina userà per scrivere nel
+registro. Deve poter fare **una cosa sola**, perché arriva a chiunque abbia la password
+di famiglia.
+
+1. Sul proprio account GitHub: foto del profilo → `Settings → Developer settings →
+   Personal access tokens → Fine-grained tokens → Generate new token`.
+2. **Token name**: a piacere, es. `calendario-case-registro`.
+3. **Expiration**: una scadenza a scelta (al massimo un anno) oppure nessuna. Alla
+   scadenza le modifiche smettono di funzionare, la pagina lo dice e il job notturno
+   lo segnala; basta ripetere questi passi con un token nuovo.
+4. **Repository access**: `Only select repositories`, e nell'elenco **solo questo
+   repository**.
+5. **Permissions → Repository permissions → Issues**: `Read and write`. Nient'altro
+   (`Metadata: Read-only` viene aggiunto da GitHub).
+6. `Generate token` e copiare il valore: inizia con `github_pat_`.
+7. Nel repository: `Settings → Secrets and variables → Actions → New repository secret`,
+   nome `FAMILY_LOG_TOKEN`, valore il token.
+8. `Actions → Aggiornamento notturno → Run workflow`. Alla prima esecuzione il job crea
+   la issue «Registro di famiglia (dati cifrati: non modificare)» e la blocca; da quel
+   momento nella pagina compare il pulsante «Aggiungi un periodo».
+
+Le Issues devono essere attive nel repository (`Settings → General → Features →
+Issues`, lo sono per impostazione predefinita). Un token classico (`ghp_…`) viene
+rifiutato: non si può limitare a un solo repository.
+
 ## Cosa mostra la pagina
 
 | | Password di famiglia | Password della proprietà |
 |---|---|---|
 | Calendario unico delle case, stato di stanotte, prossimi periodi liberi | sì | sì |
 | Elenco soggiorni e blocchi, con canale e numero di ospiti | sì | sì |
+| «Chi usa la casa»: periodi della famiglia, inseribili e modificabili da tutti | sì | sì |
+| Date che la famiglia conta di usare ma ancora in vendita, con il link al portale | no | sì |
 | Statistiche mensili, grafico del netto, dettaglio economico per prenotazione | no | sì |
 
 ### Come si legge il calendario
@@ -107,6 +150,38 @@ Tre stati, con lo stesso nome ovunque:
 I nomi degli ospiti e le nazionalità non vengono mai letti dal portale: il programma
 estrae solo date, canale, numero di ospiti e colonne di importi.
 
+### Chi usa la casa
+
+Un periodo si aggiunge con «Aggiungi un periodo» oppure toccando un giorno del
+calendario: casa, check-in, check-out, chi la usa, una nota facoltativa e il nome di
+chi scrive (il dispositivo lo ricorda). Chiunque può poi modificarlo o eliminarlo;
+l'eliminazione chiede conferma. Non ci sono utenti né permessi: vale la fiducia fra chi
+ha la password di famiglia, e il nome di chi scrive è quello che ciascuno dichiara.
+
+Il periodo compare nell'elenco e nel calendario, come barra sopra quelle del gestore,
+con il suo stato rispetto al portale:
+
+| Stato | Significato |
+|---|---|
+| **Bloccata sul portale** | tutte le notti sono chiuse alla vendita: nessun ospite può prenotarle |
+| **Da bloccare sul portale** | alcune notti sono ancora in vendita (sono elencate): finché non vengono chiuse, un ospite può prenotarle |
+| **Ci sono ospiti in quelle date** | dopo l'inserimento è arrivata una prenotazione: il periodo va spostato |
+| **Non verificabile sul portale** | il portale non pubblica ancora quelle date, o quella notte non è stato letto |
+
+Lo stato si aggiorna da solo a ogni lettura notturna dei portali. Chiudere le date
+resta un gesto del proprietario: nell'area proprietà l'elenco «Da chiudere sul portale
+del gestore» raccoglie le notti ancora scoperte, con il link alla scheda
+dell'appartamento sul portale (se il gestore non consente al proprietario di chiudere
+le date da lì, vanno chieste a lui).
+
+La pagina rifiuta un periodo che cade su notti con ospiti, che si sovrappone a un altro
+periodo della famiglia nella stessa casa, o più lungo di 366 notti; arrivare il giorno
+in cui qualcuno parte è ammesso, come per gli ospiti. Se due persone modificano lo
+stesso periodo negli stessi istanti vale l'ultima scrittura.
+
+Le modifiche degli altri arrivano quando si riapre la pagina o si torna sulla scheda
+(e comunque entro un minuto e mezzo); il job notturno le consolida nella pagina.
+
 Gli importi sono quelli dei portali, con le colonne che ciascun gestore ha
 configurato (possono differire da casa a casa). Le uniche grandezze calcolate sono
 marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
@@ -118,9 +193,17 @@ marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
   lascia mai il dispositivo.
 - **Due livelli.** Il blocco della proprietà contiene la chiave di famiglia: con la
   password della proprietà si apre tutto, con quella di famiglia solo il calendario.
-- **Nessuna connessione in uscita.** La pagina è un unico file con una
+- **Una sola connessione in uscita.** La pagina è un unico file con una
   Content-Security-Policy che ammette solo il proprio script e il proprio stile (per
-  hash) e nessuna richiesta di rete.
+  hash). Non carica nulla da nessun sito; l'unico indirizzo che può contattare è
+  `api.github.com`, e lo fa solo se «Chi usa la casa» è attivo, per leggere e scrivere
+  il registro di famiglia.
+- **Registro di famiglia.** Ogni modifica è un commento della issue «Registro di
+  famiglia», cifrato nel browser con la chiave di famiglia (AES-256-GCM) e riempito
+  fino a una lunghezza standard, perché la lunghezza non riveli nulla. La issue è
+  pubblica come il repository: chiunque può vedere *quante* modifiche ci sono e *quando*
+  sono state fatte, non che cosa dicono. È bloccata: può aggiungervi commenti solo chi
+  ha accesso in scrittura al repository, cioè il proprietario e il token a suo nome.
 - **«Ricorda su questo dispositivo»** salva nel browser la chiave derivata, non la
   password. «Blocca» la cancella. Non usarlo su dispositivi condivisi.
 - **Log pubblici.** Il repository è pubblico, quindi lo sono i log di Actions: il
@@ -135,6 +218,22 @@ Limiti da conoscere:
 - Le credenziali dei portali stanno nei secret di GitHub: chi ha accesso in scrittura
   al repository può farle uscire modificando un workflow. Tenere il repository
   personale e l'account GitHub protetto da autenticazione a due fattori.
+- Il token del registro viaggia dentro la parte della pagina cifrata con la password di
+  famiglia: chi ha quella password può estrarlo. Con il solo permesso Issues su questo
+  repository può creare, modificare e cancellare issue e commenti a nome del
+  proprietario dell'account (quindi anche rovinare il registro), ma non toccare codice,
+  workflow, secret o la pagina. Per questo il permesso non va mai allargato.
+- Cambiare la password di famiglia non revoca il token. Per escludere qualcuno vanno
+  rifatti entrambi: token nuovo (quello vecchio si elimina da `Developer settings`) e
+  password nuova.
+- Dopo un cambio di `FAMILY_PASSPHRASE` le voci già scritte restano cifrate con la
+  chiave precedente. Per portarle sotto la nuova, aggiungere per una sola esecuzione il
+  secret `OLD_FAMILY_PASSPHRASE` con la password vecchia, poi cancellarlo.
+- La chiave dipende anche dal nome del repository. Prima di rinominarlo, fissare in
+  `properties.toml` la riga `site_id = "<utente>/<nome attuale>"`, altrimenti le voci
+  del registro non si aprono più.
+- La issue del registro non va rinominata, chiusa o cancellata, e i suoi commenti non
+  vanno toccati: sono l'unica copia delle voci inserite.
 
 ## Controlli di coerenza
 
@@ -164,6 +263,7 @@ il problema.
 | «Dati non aggiornati» (tutta la pagina) | l'ultimo aggiornamento ha più di 36 ore: il job notturno non sta girando o fallisce |
 | «*Casa*: dati non aggiornati» | il portale di quella casa non ha risposto; la casa mostra gli ultimi dati validi, l'altra è aggiornata |
 | «*Casa*: dati non disponibili» | il portale non è stato letto e non esistono dati precedenti: la casa non compare, per non farla sembrare libera |
+| «Modifiche recenti non lette» (in «Chi usa la casa») | il registro di famiglia non risponde: la riga accanto dice se manca la connessione, se il token è scaduto o revocato, o se GitHub sta limitando le richieste. Le voci già note restano visibili |
 
 **GitHub manda una mail quando il job fallisce** (verificare in
 `Settings → Notifications → Actions` del proprio account). L'errore è nel log del job:
@@ -176,6 +276,15 @@ il problema.
 | `LayoutError: …` | il gestore o Krossbooking hanno cambiato la pagina | va aggiornato il parser (`casecal/parse.py`) |
 | `l'account contiene N appartamenti` | più unità nello stesso account | aggiungere il secret `<CASA>_KB_UNIT` con il nome dell'appartamento |
 | `Get Pages site failed` | GitHub Pages non attivo | completare il passo 2 |
+| `registro di famiglia non letto (… token rifiutato …)` | token scaduto o eliminato | ripetere il passo 6 con un token nuovo |
+| `… il token non ha il permesso Issues su questo repository` | token creato per un altro repository o senza permesso | ripetere il passo 6 |
+| `… le Issues sono disattivate in questo repository` | funzione Issues spenta | `Settings → General → Features → Issues` |
+| `FAMILY_LOG_TOKEN non è un token fine-grained` | inserito un token classico | ripetere il passo 6: il token deve iniziare con `github_pat_` |
+| `N voci del registro di famiglia non si aprono con la password attuale` | password di famiglia cambiata | impostare `OLD_FAMILY_PASSPHRASE` per un'esecuzione |
+
+Quando il registro non si legge, la pagina viene pubblicata lo stesso con le voci già
+note e il job risulta fallito, così arriva la mail. Finché il token non funziona la
+famiglia non può inserire né modificare periodi.
 
 **Schedule disattivato.** GitHub spegne i workflow schedulati dei repository pubblici
 dopo 60 giorni senza attività. Il job si riabilita da solo a ogni esecuzione; se
@@ -201,7 +310,11 @@ Pagina di prova con dati inventati (le password vengono stampate):
 python -m casecal demo --out dist-demo
 ```
 
-Prova end-to-end in un browser vero, richiede Playwright con Chromium:
+Nella pagina di prova le modifiche a «Chi usa la casa» restano nel browser che le fa.
+
+Prova end-to-end in un browser vero, richiede Playwright con Chromium. Simula anche due
+dispositivi sullo stesso registro, con una finta API di GitHub, e rilegge quanto
+scritto con il codice del job notturno:
 
 ```bash
 node tests/e2e/smoke.js dist-demo
@@ -218,10 +331,13 @@ le variabili d'ambiente del passo 1).
 | `casecal/parse.py` | HTML del portale → dati, con i controlli di coerenza |
 | `casecal/model.py` | modello dati e formato pubblicato |
 | `casecal/crypto.py` | derivazione delle chiavi e cifratura a due livelli |
+| `casecal/family.py` | voci della famiglia: validazione, eventi cifrati, ricostruzione dello stato |
+| `casecal/familylog.py` | registro di famiglia su GitHub: lettura notturna e impostazioni per la pagina |
 | `casecal/sync.py` | orchestrazione notturna e recupero dell'ultimo stato valido |
 | `casecal/site.py` | assemblaggio della pagina unica e della sua CSP |
-| `casecal/web/` | la pagina: decifratura, logica del calendario, interfaccia |
+| `casecal/web/` | la pagina: decifratura, logica del calendario, registro (`store.js`), interfaccia |
 | `tests/portal_html.py` | pagine sintetiche con la stessa struttura del portale |
+| `tests/github_fake.py` | controfigura dell'API di GitHub usata dal registro |
 
 Questo repository è pubblico: nei test non devono mai entrare pagine scaricate dai
 portali, nomi, indirizzi o importi veri.

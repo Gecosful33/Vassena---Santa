@@ -13,12 +13,21 @@ import traceback
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
 from .config import Config, PortalCredentials, PropertyConfig
-from .crypto import EnvelopeError, build_envelope, open_envelope, site_salt
+from .crypto import EnvelopeError, build_envelope, derive_key, open_envelope, site_salt
 from .errors import PortalError, SyncAborted
+from .family import FamilyEntry, FamilyError, ordered
+from .familylog import (
+    DEFAULT_API,
+    FamilyLogError,
+    FamilyState,
+    GitHubLog,
+    read_family_state,
+    token_problem,
+)
 from .model import (
     DataError,
     MissingProperty,
@@ -29,7 +38,18 @@ from .model import (
 from .site import SiteError, fetch_published_envelope, render_page, write_site
 
 Fetcher = Callable[[PropertyConfig, PortalCredentials, Sequence[int], datetime], PropertySnapshot]
-PreviousLoader = Callable[[], Mapping[str, PropertySnapshot]]
+
+
+@dataclass
+class PreviousPage:
+    """What the page currently online holds: the job's only state between runs."""
+
+    properties: dict[str, PropertySnapshot] = field(default_factory=dict)
+    entries: list[FamilyEntry] = field(default_factory=list)
+    log: dict[str, Any] | None = None
+
+
+PreviousLoader = Callable[[], PreviousPage]
 
 
 @dataclass
@@ -94,7 +114,7 @@ def collect(
     if not fetched:
         raise SyncAborted("nessun portale letto: la pagina online resta invariata")
 
-    previous = load_previous() if report.errors else {}
+    previous = load_previous().properties if report.errors else {}
     properties: list[PropertySnapshot | MissingProperty] = []
     for prop in config.properties:
         if prop.id in fetched:
@@ -122,25 +142,78 @@ def collect(
 
 def previous_from_site(
     site_url: str | None, *, family_passphrase: str, owner_passphrase: str
-) -> dict[str, PropertySnapshot]:
-    """Last published data per house, or nothing if it cannot be read back."""
+) -> PreviousPage:
+    """What the page currently online holds, or an empty page if it cannot be read back."""
     if not site_url:
-        return {}
+        return PreviousPage()
     envelope = fetch_published_envelope(site_url)
     if envelope is None:
-        return {}
+        return PreviousPage()
     try:
         family, owner = open_envelope(
             envelope, family_passphrase=family_passphrase, owner_passphrase=owner_passphrase
         )
     except EnvelopeError:
-        return {}
+        return PreviousPage()
     if family is None or family.get("demo"):
-        return {}
+        return PreviousPage()
     try:
-        return properties_from_payloads(family, owner)
+        properties = properties_from_payloads(family, owner)
     except (DataError, KeyError, TypeError, ValueError):
-        return {}
+        properties = {}
+    entries: list[FamilyEntry] = []
+    for raw in family.get("entries") or []:
+        try:
+            entries.append(FamilyEntry.from_dict(raw))
+        except FamilyError:
+            continue
+    log = family.get("log")
+    return PreviousPage(properties=properties, entries=entries, log=log if isinstance(log, dict) else None)
+
+
+def family_state(
+    config: Config,
+    *,
+    token: str | None,
+    repository: str | None,
+    family_passphrase: str,
+    old_family_passphrase: str | None,
+    load_previous: PreviousLoader,
+    api: str = DEFAULT_API,
+) -> FamilyState:
+    """The family's entries and the settings that let the page edit them.
+
+    Without a token the feature is simply off: the page stays read-only.
+    """
+    if not token:
+        return FamilyState(entries=[], log=None, warnings=[])
+
+    def keep_published() -> FamilyState:
+        previous = load_previous()
+        return FamilyState(entries=ordered(previous.entries), log=previous.log, warnings=[])
+
+    unsafe = token_problem(token)
+    if unsafe:
+        # The entries stay visible, but no token is handed to the page: not this one,
+        # and not the one the page online may still carry.
+        kept = keep_published()
+        return FamilyState(entries=kept.entries, log=None, warnings=[unsafe])
+
+    try:
+        log = GitHubLog(token, repository or "", api=api)
+    except FamilyLogError as exc:
+        kept = keep_published()
+        kept.warnings.append(f"registro di famiglia non configurato ({exc})")
+        return kept
+    salt = site_salt(config.site_id)
+    return read_family_state(
+        log,
+        key=derive_key(family_passphrase, salt),
+        old_key=derive_key(old_family_passphrase, salt) if old_family_passphrase else None,
+        token=token,
+        known_houses={prop.id for prop in config.properties},
+        fallback=keep_published,
+    )
 
 
 def publish(
