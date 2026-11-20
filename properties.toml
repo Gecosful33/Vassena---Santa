@@ -1,0 +1,24 @@
+# Case mostrate nel calendario.
+#
+# Questo file è pubblico: contiene solo i nomi delle case. Indirizzi dei portali,
+# utenti, password e le due passphrase stanno nei secret di GitHub Actions
+# (vedi README), mai qui.
+
+title = "Calendario case"
+timezone = "Europe/Rome"
+
+# Anni futuri da leggere oltre a quello corrente.
+years_ahead = 1
+
+# Nota facoltativa mostrata in fondo alla pagina (finisce cifrata, ma qui è in chiaro).
+# note = "Per usare una casa scrivi nel gruppo di famiglia."
+
+[[property]]
+id = "santa"
+label = "Santa"
+env = "SANTA"      # secret: SANTA_KB_URL, SANTA_KB_USER, SANTA_KB_PASS
+
+[[property]]
+id = "vassena"
+label = "Vassena"
+env = "VASSENA"    # secret: VASSENA_KB_URL, VASSENA_KB_USER, VASSENA_KB_PASS

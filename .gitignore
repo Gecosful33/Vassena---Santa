@@ -1,0 +1,14 @@
+# Built pages: they are deployed by the workflow, never committed.
+dist/
+dist-*/
+
+# Local secrets and scratch files. Credentials must never enter this public repository.
+.env
+.env.*
+*.local
+fixtures-private/
+
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
