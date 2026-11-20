@@ -33,6 +33,7 @@ def write_config(tmp_path, text):
 def test_the_repository_configuration_is_valid():
     config = load_config(ROOT / "properties.toml")
     assert [p.id for p in config.properties] == ["santa", "vassena"]
+    assert [(p.check_in, p.check_out) for p in config.properties] == [("15:00", "11:00")] * 2
     assert config.timezone == "Europe/Rome"
     assert config.properties[0].secret_names() == ("SANTA_KB_URL", "SANTA_KB_USER", "SANTA_KB_PASS")
 
@@ -56,6 +57,40 @@ def test_the_repository_configuration_holds_no_secrets():
     ],
 )
 def test_invalid_configuration_is_explained(tmp_path, text, message):
+    with pytest.raises(ConfigError, match=message):
+        load_config(write_config(tmp_path, text))
+
+
+HOUSE = '[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n'
+
+
+def test_house_hours_default_to_three_and_eleven(tmp_path):
+    prop = load_config(write_config(tmp_path, HOUSE)).properties[0]
+    assert (prop.check_in, prop.check_out) == ("15:00", "11:00")
+
+
+def test_house_hours_can_be_set_for_all_houses_and_overridden_for_one(tmp_path):
+    text = (
+        'check_in = "16:00"\ncheck_out = "10:30"\n' + HOUSE
+        + '[[property]]\nid = "b"\nlabel = "B"\nenv = "B"\ncheck_in = "14:00"\n'
+    )
+    first, second = load_config(write_config(tmp_path, text)).properties
+    assert (first.check_in, first.check_out) == ("16:00", "10:30")
+    assert (second.check_in, second.check_out) == ("14:00", "10:30")  # only the override changes
+
+
+@pytest.mark.parametrize(
+    "text, message",
+    [
+        ('check_in = "3pm"\n' + HOUSE, "check_in deve essere un orario HH:MM"),
+        ('check_out = "24:00"\n' + HOUSE, "check_out deve essere un orario HH:MM"),
+        ('check_in = "9:00"\n' + HOUSE, "check_in deve essere un orario HH:MM"),
+        (HOUSE + 'check_out = "11.00"\n', "a: check_out deve essere un orario HH:MM"),
+        ('check_in = "10:00"\ncheck_out = "11:00"\n' + HOUSE, "check_out deve precedere check_in"),
+        (HOUSE + 'check_in = "11:00"\n', "a: check_out deve precedere check_in"),
+    ],
+)
+def test_impossible_house_hours_are_refused(tmp_path, text, message):
     with pytest.raises(ConfigError, match=message):
         load_config(write_config(tmp_path, text))
 

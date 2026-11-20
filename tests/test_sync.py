@@ -94,6 +94,23 @@ def test_one_failure_reuses_the_published_data_for_that_house_only():
     assert snapshot.generated_at == NOW
 
 
+def test_reused_data_takes_the_house_hours_from_the_current_configuration():
+    config = Config(properties=(
+        CONFIG.properties[0],
+        PropertyConfig(id="vassena", label="Vassena", env="VASSENA", check_in="16:00", check_out="10:00"),
+    ))
+    old = house("vassena", NOW - timedelta(days=1))  # stored with the usual 15:00 / 11:00
+    snapshot, _ = collect(
+        config,
+        CREDENTIALS,
+        fetch=fetcher({"vassena": LoginError("credenziali rifiutate")}),
+        load_previous=lambda: {"vassena": old},
+        now=NOW,
+    )
+    reused = snapshot.properties[1]
+    assert (reused.check_in_time, reused.check_out_time) == ("16:00", "10:00")
+
+
 def test_a_failure_without_earlier_data_is_published_as_missing():
     snapshot, report = collect(
         CONFIG,

@@ -198,6 +198,8 @@ def read_property(
         reservation_columns=reservations.columns if reservations else (),
         reservation_roles=reservations.roles if reservations else {},
         reservations=reservations.rows if reservations else [],
+        check_in_time=prop.check_in,
+        check_out_time=prop.check_out,
         warnings=warnings,
     )
 

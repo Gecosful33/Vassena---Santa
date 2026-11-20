@@ -271,6 +271,9 @@ class PropertySnapshot:
     reservation_columns: tuple[str, ...] = ()
     reservation_roles: dict[str, int] = field(default_factory=dict)
     reservations: list[Reservation] = field(default_factory=list)
+    # House rules (HH:MM): they come from the configuration, not from the portal.
+    check_in_time: str = "15:00"
+    check_out_time: str = "11:00"
     # Non-fatal problems met while reading this house (safe to log); never published.
     warnings: list[str] = field(default_factory=list, compare=False)
 
@@ -318,6 +321,8 @@ class PropertySnapshot:
             "fetched_at": iso_utc(self.fetched_at),
             "from": self.covered_from.isoformat(),
             "to": self.covered_to.isoformat(),
+            "check_in": self.check_in_time,
+            "check_out": self.check_out_time,
             "stays": [stay.to_row() for stay in self.stays],
         }
 
@@ -346,6 +351,8 @@ class PropertySnapshot:
             covered_from=date.fromisoformat(family["from"]),
             covered_to=date.fromisoformat(family["to"]),
             stays=[Stay.from_row(row) for row in family["stays"]],
+            check_in_time=family.get("check_in", "15:00"),
+            check_out_time=family.get("check_out", "11:00"),
             kpi_columns=tuple(owner.get("kpi_columns", ())),
             kpi_roles=dict(owner.get("kpi_roles", {})),
             kpis=[MonthKpi.from_dict(raw) for raw in owner.get("kpis", [])],

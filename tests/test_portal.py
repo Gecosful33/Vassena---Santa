@@ -227,10 +227,17 @@ def test_reading_a_house_end_to_end():
     assert snapshot.reservation_columns == ("Totale pernottamento", "Netto proprietario")
     assert len(snapshot.reservations) == 2
     assert snapshot.warnings == []
+    assert (snapshot.check_in_time, snapshot.check_out_time) == ("15:00", "11:00")
     assert "Rossi" not in repr(snapshot) and "Verdi" not in repr(snapshot)
     asked = [call[3] for call in session.calls if call[1] == "/demo/vr/stats"]
     assert asked == [{}, {"year": "2026", "apt": "7"}, {"year": "2027", "apt": "7"}]
     assert all(call[0] == "GET" for call in session.calls[2:]), "after login the portal is only read"
+
+
+def test_the_house_hours_come_from_the_configuration_not_the_portal():
+    late = PropertyConfig(id="santa", label="Santa", env="SANTA", check_in="17:00", check_out="09:30")
+    snapshot = read_property(logged_in(FakeSession(routes())), late, None, [2026, 2027], NOW)
+    assert (snapshot.check_in_time, snapshot.check_out_time) == ("17:00", "09:30")
 
 
 def test_losing_the_reservation_details_does_not_lose_the_calendar():
