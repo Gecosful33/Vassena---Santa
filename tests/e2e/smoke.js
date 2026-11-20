@@ -328,7 +328,41 @@ async function main() {
   assert.equal(await page.locator(".tiles").count(), 0);
   assert.ok(!(await page.textContent("#app")).includes("Netto proprietario"), "no economics rendered for the family");
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 2); // the stays of each house
+  await tablesKeepTheirShape(page, 4); // the guests to come and the stays of each house
+
+  // The card of a house says who is there and who is coming next: no free periods, no blocked dates.
+  const cards = await page.locator(".house").evaluateAll((nodes) => nodes.map((node) => node.innerText));
+  for (const card of cards) {
+    assert.match(card, /PROSSIMI OSPITI/i);
+    assert.ok(!/stanotte|periodi liberi|Bloccata|Libera/i.test(card), "a card lists guests only");
+  }
+  const guestRows = (house) => page.locator(".house").nth(house).locator("tbody tr");
+  assert.deepEqual(await page.locator(".house").first().locator("thead th").evaluateAll((cells) => cells.map((cell) => cell.firstChild.textContent)),
+    ["Check-in", "Check-out", "Notti", "Canale"]);
+  assert.equal(await guestRows(0).count(), 4, "the first few stays are shown");
+  // The demo has guests in the first house today, a same-day turnover in three days, and the second house's next arrival in five.
+  assert.match(await guestRows(0).nth(0).innerText(), /in casa ora/);
+  assert.equal(await page.locator(".house").first().locator("tbody tr.current").count(), 1);
+  assert.match(await guestRows(0).nth(1).innerText(), /tra 3 giorni/);
+  assert.match(await guestRows(1).nth(0).innerText(), /tra 5 giorni/);
+  assert.equal(await page.locator(".house").nth(1).locator("tbody tr.current").count(), 0);
+  assert.equal(await page.locator(".house tbody .sub", { hasText: /^(tra \d+ giorni|oggi|domani)$/ }).count(), 2, "only the next arrival of each house says how far it is");
+  const allGuests = page.locator('[data-key="guests:mare"]');
+  assert.match(await allGuests.innerText(), /^Mostra tutti i \d+ soggiorni$/);
+  await allGuests.click();
+  assert.ok((await guestRows(0).count()) > 4, "the whole list on request");
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "guests:mare", "focus stays on the toggle");
+  await tablesKeepTheirShape(page, 4);
+  await page.locator('[data-key="guests:mare"]').click();
+  assert.equal(await guestRows(0).count(), 4);
+
+  // The first house is violet, the second orange; text on a solid bar is white on the light surface.
+  const lightColours = await page.evaluate(() => {
+    const colour = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
+    return [colour(".house.p0 .swatch", "backgroundColor"), colour(".house.p1 .swatch", "backgroundColor"),
+      colour(".lane.p0 .bar.booking", "backgroundColor"), colour(".lane.p0 .bar.booking", "color")];
+  });
+  assert.deepEqual(lightColours, ["rgb(98, 80, 214)", "rgb(235, 104, 52)", "rgb(98, 80, 214)", "rgb(255, 255, 255)"]);
 
   // The family's own periods: listed, drawn over the calendar, each with its standing on the portal.
   const demoNames = await names(page);
@@ -414,7 +448,19 @@ async function main() {
   const monthNames = await page.locator(".kpi-tables table").first().locator("tbody td:first-child").allTextContents();
   assert.deepEqual([monthNames.length, monthNames[0], monthNames[11]], [12, "Gennaio", "Dicembre"]);
   assert.match(await page.locator(".kpi-tables table").first().locator("tfoot").innerText(), /^Totale \d{4}\s/);
-  await tablesKeepTheirShape(page, 6); // stays, monthly statistics and reservations of each house
+  // The bookings of the year are summed up in one row, not listed one by one.
+  const totals = page.locator(".kpi-tables > div").first().locator("table").nth(1);
+  assert.equal(await page.locator(".kpi-tables > div").first().locator("table").count(), 2);
+  assert.deepEqual(await totals.evaluate((table) => [...table.children].map((group) => group.tagName + ":" + group.rows.length)),
+    ["THEAD:1", "TFOOT:1"]);
+  assert.deepEqual(await totals.locator("thead th").allTextContents(),
+    ["", "Notti", "Totale pernottamento", "Imposta", "Commissioni gestore", "Commissioni OTA", "Netto proprietario"]);
+  const totalCells = await totals.locator("tfoot td").allTextContents();
+  assert.equal(totalCells[0], "Totale");
+  assert.match(totalCells[1], /^\d+$/);
+  for (const amount of totalCells.slice(2)) assert.match(amount, /^[\d.]+,\d{2}\s€$/);
+  assert.ok(!/Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()), "no booking is listed in the owner area");
+  await tablesKeepTheirShape(page, 8); // guests to come, stays, monthly statistics and reservation totals of each house
   assert.ok((await page.locator(".col").count()) > 0, "monthly chart drawn");
   // The owner's to-do: the family periods whose nights are still for sale, and only those.
   const todo = await page.locator(".todo").innerText();
@@ -441,7 +487,14 @@ async function main() {
   await page.waitForSelector(".tiles");
   assert.equal(await page.locator(".house").count(), 2);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 6);
+  await tablesKeepTheirShape(page, 8);
+  // On the dark surface the same two hues are lighter, and the text on a solid bar is dark.
+  const darkColours = await page.evaluate(() => {
+    const colour = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
+    return [colour(".house.p0 .swatch", "backgroundColor"), colour(".house.p1 .swatch", "backgroundColor"),
+      colour(".lane.p0 .bar.booking:not(.past)", "color")];
+  });
+  assert.deepEqual(darkColours, ["rgb(144, 133, 233)", "rgb(217, 89, 38)", "rgb(11, 11, 11)"]);
   await barsFollowTheHouseHours(page);
   await shot(page, "07-owner-phone-dark");
   // Bars are narrower in landscape or after a resize: labels must be fitted again.

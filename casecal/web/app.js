@@ -8,7 +8,7 @@
   var C = CaseCalCrypto, L = CaseCalLogic, Store = CaseCalStore;
   var SVG_NS = "http://www.w3.org/2000/svg";
   var STORE = "casecal.keys.v1";
-  var WINDOWS_SHOWN = 4;
+  var GUESTS_SHOWN = 4;
   var IT = "it-IT";
 
   var root = document.getElementById("app");
@@ -19,7 +19,7 @@
   function blankState() {
     return {
       family: null, owner: null, props: [], today: 0, filter: "all", year: null,
-      showPast: false, pastStays: {}, allWindows: {}, remembered: false,
+      showPast: false, pastStays: {}, allGuests: {}, remembered: false,
       // The family's own entries: the current map, where changes are written (null =
       // read-only page), how far the log has been read, and the key that opens it.
       entries: {}, store: null, cursor: 0, familyKey: null,
@@ -846,25 +846,12 @@
     }));
   }
 
-  function nowLine(prop) {
-    var status = L.nightStatus(prop, state.today);
-    var title, rest;
-    if (status.state === "free") {
-      title = "Libera stanotte";
-      rest = status.open ? "nessuna prenotazione successiva"
-        : "fino alle " + prop.hours.checkIn + " di " + dayLabel(status.until) + " (" + nights(status.until - state.today) + ")";
-    } else if (status.state === "unknown") {
-      title = "Dato non disponibile";
-      rest = "il calendario del gestore non copre la data di oggi";
-    } else {
-      title = status.state === "closed" ? "Bloccata stanotte" : "Ospiti in casa stanotte";
-      rest = (status.state === "closed" ? "chiusa alla vendita, senza ospiti · " : "") +
-        (status.until === null ? "nessuna notte libera nel periodo noto"
-          : "libera dalle " + prop.hours.checkOut + " di " + dayLabel(status.until));
-    }
-    return el("p", { class: "now" }, icon(status.state), el("span", null, el("strong", { text: title }), " · " + rest));
+  /** How far away a check-in is, in words. */
+  function inDaysLabel(days) {
+    return days === 0 ? "oggi" : days === 1 ? "domani" : "tra " + F.int.format(days) + " giorni";
   }
 
+  /** One house: who is there and who is coming next, and nothing else. */
   function houseCard(prop) {
     var card = el("article", { class: "card house p" + prop.index },
       el("div", { class: "house-head" }, el("i", { class: "swatch" }), el("h3", { text: prop.label }),
@@ -874,51 +861,49 @@
         el("span", null, el("strong", { text: "Dati non disponibili" }), " · il portale del gestore non è stato letto")));
       return card;
     }
-    append(card, nowLine(prop));
-    var unsettled = L.entriesOf(state.entries, prop.id).filter(function (entry) {
-      var kind = L.entryStatus(entry, prop).state;
-      return entry.end > state.today && (kind === "pending" || kind === "conflict");
-    }).length;
-    if (unsettled) {
-      append(card, el("p", { class: "now" }, icon("warning"), el("span", null,
-        el("strong", { text: unsettled === 1 ? "1 periodo di famiglia non ancora bloccato" : unsettled + " periodi di famiglia non ancora bloccati" }),
-        " · vedi «Chi usa la casa»")));
-    }
-    append(card, el("h4", { text: "Prossimi periodi liberi" }));
-    var windows = L.freeWindows(prop, state.today);
-    if (!windows.length) {
-      append(card, el("p", { class: "empty", text: "Nessun periodo libero fino a " + shortLabel(prop.to - 1) + "." }));
+    append(card, el("h4", { text: "Prossimi ospiti" }));
+    var guests = L.upcomingGuests(prop, state.today);
+    if (!guests.length) {
+      append(card, el("p", { class: "empty", text: "Nessun ospite in arrivo fino a " + shortLabel(prop.to - 1) + "." }));
       return card;
     }
-    var expanded = !!state.allWindows[prop.id];
-    var shown = expanded ? windows : windows.slice(0, WINDOWS_SHOWN);
+    var expanded = !!state.allGuests[prop.id];
+    var shown = expanded ? guests : guests.slice(0, GUESTS_SHOWN);
+    // What the portal says about each stay, where it says anything: the channel, the number of guests.
+    var withDetails = guests.some(function (guest) { return !!stayDetails(guest.stay); });
+    var withChannel = guests.some(function (guest) { return !!guest.stay.channel; });
+    var next = guests.filter(function (guest) { return !guest.current; })[0];
     append(card, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
-        el("th", { scope: "col", text: "Da" }), el("th", { scope: "col", text: "A" }),
-        el("th", { scope: "col", class: "num", text: "Notti" }))),
-      el("tbody", null, shown.map(function (w) {
-        // The house empties at check-out time and fills again at the next check-in time.
-        var afterCheckout = !!L.dayInfo(prop, w.start).leaving;
-        return el("tr", null,
-          el("td", null, w.start === state.today ? "oggi" : dayLabel(w.start),
-            afterCheckout ? el("span", { class: "sub", text: "dalle " + prop.hours.checkOut }) : null),
-          el("td", null, w.open ? "in poi" : dayLabel(w.end),
-            w.open ? null : el("span", { class: "sub", text: "fino alle " + prop.hours.checkIn })),
-          el("td", { class: "num", text: w.open ? "–" : F.int.format(w.nights) }));
+        el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
+        el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
+        el("th", { scope: "col", class: "num", text: "Notti" }),
+        withDetails ? el("th", { scope: "col", text: withChannel ? "Canale" : "Ospiti" }) : null)),
+      el("tbody", null, shown.map(function (guest) {
+        var stay = guest.stay;
+        var known = stay.guests !== null && stay.guests !== undefined;
+        // The soonest arrival also says how far away it is; guests already there say so.
+        var when = guest.current ? "in casa ora" : guest === next ? inDaysLabel(guest.inDays) : null;
+        return el("tr", { class: guest.current ? "current" : null },
+          el("td", { class: "date" }, dayLabel(stay.start), when ? el("span", { class: "sub", text: when }) : null),
+          el("td", { class: "date", text: dayLabel(stay.end) }),
+          el("td", { class: "num", text: F.int.format(stay.end - stay.start) }),
+          withDetails ? el("td", null, stay.channel || (known ? guestsLabel(stay.guests) : ""),
+            stay.channel && known ? el("span", { class: "sub", text: guestsLabel(stay.guests) }) : null) : null);
       }))));
-    if (windows.length > WINDOWS_SHOWN) {
-      var key = "windows:" + prop.id;
+    if (guests.length > GUESTS_SHOWN) {
+      var key = "guests:" + prop.id;
       append(card, el("button", {
         class: "btn quiet more", type: "button", "data-key": key, "aria-expanded": String(expanded),
-        text: expanded ? "Mostra meno" : "Mostra tutti i " + windows.length + " periodi",
-        onclick: function () { state.allWindows[prop.id] = !expanded; render(key); }
+        text: expanded ? "Mostra meno" : "Mostra tutti i " + guests.length + " soggiorni",
+        onclick: function () { state.allGuests[prop.id] = !expanded; render(key); }
       }));
     }
     return card;
   }
 
   function availability() {
-    return el("section", { class: "houses", "aria-label": "Disponibilità" }, visible().map(houseCard));
+    return el("section", { class: "houses", "aria-label": "Prossimi ospiti" }, visible().map(houseCard));
   }
 
   function seriesLegend(props) {
@@ -1327,7 +1312,7 @@
   function wideTable(columns, body, footer) {
     var table = el("table", { class: "rows kpi" },
       el("thead", null, headerRow(columns)),
-      el("tbody", null, body),
+      body.length ? el("tbody", null, body) : null,
       footer ? el("tfoot", null, footer) : null);
     table.style.minWidth = (columns.length * 86) + "px";
     return el("div", { class: "scroll" }, table);
@@ -1368,32 +1353,18 @@
     ];
   }
 
-  /** The bookings checked in during the year, with the amounts the portal lists for each. */
-  function reservationTable(year, entry) {
+  /**
+   * What the bookings checked in during the year add up to, in the columns the portal
+   * lists. The bookings themselves are in the stays of each house, without amounts.
+   */
+  function reservationTotals(year, entry) {
     var data = L.yearReservations(entry.owner, year);
     if (!data.rows.length) return null;
-    var names = entry.owner.res_columns || [];
-    var withChannel = data.rows.some(function (row) { return !!row.channel; });
-    var withGuests = data.rows.some(function (row) { return row.guests !== null && row.guests !== undefined; });
-    var columns = [{ name: "Check-in", date: true }, { name: "Check-out", date: true }, { name: "Notti", numeric: true }];
-    if (withChannel) columns.push({ name: "Canale" });
-    if (withGuests) columns.push({ name: "Ospiti", numeric: true });
-    names.forEach(function (name) { columns.push({ name: name, numeric: true }); });
-
-    function line(first, second, nightCount, channel, guests, vals) {
-      var out = [first, second, F.int.format(nightCount)];
-      if (withChannel) out.push(channel || "");
-      if (withGuests) out.push(guests === null || guests === undefined ? "" : String(guests));
-      return out.concat(vals.map(euro));
-    }
+    var columns = [{ name: "" }, { name: "Notti", numeric: true }];
+    (entry.owner.res_columns || []).forEach(function (name) { columns.push({ name: name, numeric: true }); });
     return [
       el("h4", { text: "Prenotazioni con check-in nel " + year + " (" + data.rows.length + ")" }),
-      wideTable(columns,
-        data.rows.map(function (row) {
-          return bodyRow(columns, line(F.day.format(dateOf(row.start)), F.day.format(dateOf(row.end)),
-            row.nights, row.channel, row.guests, row.vals));
-        }),
-        bodyRow(columns, line("Totale", "", data.nights, "", null, data.totals)))
+      wideTable(columns, [], bodyRow(columns, ["Totale", F.int.format(data.nights)].concat(data.totals.map(euro))))
     ];
   }
 
@@ -1448,7 +1419,7 @@
       el("div", { class: "kpi-tables" }, series.map(function (entry) {
         return el("div", { class: "p" + entry.prop.index },
           el("h3", null, el("i", { class: "swatch" }), entry.prop.label),
-          kpiTable(year, entry), reservationTable(year, entry));
+          kpiTable(year, entry), reservationTotals(year, entry));
       }))
     ]);
     return section;

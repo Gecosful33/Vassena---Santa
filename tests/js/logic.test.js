@@ -43,35 +43,29 @@ test("days outside the known data are unknown, never free", () => {
   assert.equal(L.nightStatus(p, day("2027-01-01")).state, "unknown");
 });
 
-test("a house that could not be read is unknown and has no free windows", () => {
+test("a house that could not be read is unknown and lists no guests", () => {
   const p = L.prepare({ id: "x", label: "X", missing: true });
   assert.equal(L.dayInfo(p, day("2026-08-01")).state, "unknown");
-  assert.deepEqual(L.freeWindows(p, day("2026-08-01")), []);
+  assert.deepEqual(L.upcomingGuests(p, day("2026-08-01")), []);
 });
 
-test("free windows run between stays and stay open at the end of the data", () => {
+test("the guests to come are the stays with guests that have not ended, soonest first", () => {
   const p = house([
-    ["2026-08-01", "2026-08-07", "b"],
-    ["2026-08-07", "2026-08-10", "b"], // same-day turnover
-    ["2026-08-20", "2026-08-25", "c"]
-  ], "2026-01-01", "2027-01-01");
-  const windows = L.freeWindows(p, day("2026-07-30"));
-  assert.deepEqual(windows.map((w) => [L.ymd(w.start), L.ymd(w.end), w.nights, w.open]), [
-    ["2026-07-30", "2026-08-01", 2, false],
-    ["2026-08-10", "2026-08-20", 10, false],
-    ["2026-08-25", "2027-01-01", 129, true]
+    ["2026-07-20", "2026-07-25", "b"],                 // gone
+    ["2026-08-01", "2026-08-07", "b", "Airbnb", 4],
+    ["2026-08-07", "2026-08-10", "b", "Diretta", 2],   // same-day turnover
+    ["2026-08-20", "2026-08-25", "c"],                 // blocked dates are not guests
+    ["2026-12-30", "2027-01-02", "b"]
   ]);
-});
-
-test("free windows starting inside a stay begin when it ends", () => {
-  const p = house([["2026-08-01", "2026-08-07", "b"]], "2026-01-01", "2026-09-01");
-  const windows = L.freeWindows(p, day("2026-08-03"));
-  assert.deepEqual(windows.map((w) => [L.ymd(w.start), L.ymd(w.end)]), [["2026-08-07", "2026-09-01"]]);
-});
-
-test("a fully booked remainder yields no free window", () => {
-  const p = house([["2026-12-20", "2027-01-01", "b"]], "2026-01-01", "2027-01-01");
-  assert.deepEqual(L.freeWindows(p, day("2026-12-24")), []);
+  const list = (ymdText) => L.upcomingGuests(p, day(ymdText)).map((g) => [L.ymd(g.stay.start), g.current, g.inDays]);
+  assert.deepEqual(list("2026-07-30"), [["2026-08-01", false, 2], ["2026-08-07", false, 8], ["2026-12-30", false, 153]]);
+  assert.deepEqual(list("2026-08-01"), [["2026-08-01", true, 0], ["2026-08-07", false, 6], ["2026-12-30", false, 151]]);
+  // On a turnover day the guests leaving that morning are no longer listed; those arriving are in the house tonight.
+  assert.deepEqual(list("2026-08-07"), [["2026-08-07", true, 0], ["2026-12-30", false, 145]]);
+  assert.deepEqual(list("2026-08-10"), [["2026-12-30", false, 142]]);
+  assert.deepEqual(list("2027-01-02"), []);
+  const first = L.upcomingGuests(p, day("2026-07-30"))[0].stay;
+  assert.deepEqual([first.channel, first.guests], ["Airbnb", 4]); // what the portal says about them comes along
 });
 
 test("night status follows back-to-back stays to the first free night", () => {

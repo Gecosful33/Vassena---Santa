@@ -152,25 +152,18 @@ var CaseCalLogic = (function () {
   }
 
   /**
-   * Maximal runs of free nights from `fromDay` to the end of the known data.
-   * `open` marks the last run, which ends only because the data does.
+   * The guests in the house or still to come, from `today` on: the stays with guests
+   * that have not ended yet, soonest first. Dates blocked without guests are not listed.
+   * `current` marks the guests in the house on the night of `today`; `inDays` is how
+   * far away the check-in is (0 for today, and for guests already there).
    */
-  function freeWindows(prop, fromDay) {
-    var windows = [];
-    if (prop.missing) return windows;
-    var cursor = Math.max(fromDay, prop.from);
-    for (var i = 0; i < prop.stays.length; i++) {
-      var stay = prop.stays[i];
-      if (stay.end <= cursor) continue;
-      if (stay.start > cursor) {
-        windows.push({ start: cursor, end: stay.start, nights: stay.start - cursor, open: false });
-      }
-      cursor = Math.max(cursor, stay.end);
-    }
-    if (cursor < prop.to) {
-      windows.push({ start: cursor, end: prop.to, nights: prop.to - cursor, open: true });
-    }
-    return windows;
+  function upcomingGuests(prop, today) {
+    if (prop.missing) return [];
+    return prop.stays.filter(function (stay) {
+      return stay.kind === "booking" && stay.end > today;
+    }).map(function (stay) {
+      return { stay: stay, current: stay.start <= today, inDays: Math.max(0, stay.start - today) };
+    });
   }
 
   /** Months (as {y, m}) touched by the days in [fromDay, toDay). */
@@ -599,7 +592,7 @@ var CaseCalLogic = (function () {
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,
     prepare: prepare, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
-    freeWindows: freeWindows, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
+    upcomingGuests: upcomingGuests, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
     weekSegments: weekSegments, cellPosition: cellPosition, clockMinutes: clockMinutes, freshness: freshness,
     validEntry: validEntry, entryRecord: entryRecord, foldEvents: foldEvents, entriesOf: entriesOf,
     entryStatus: entryStatus, checkEntry: checkEntry, entryId: entryId, MAX_NIGHTS: MAX_NIGHTS,

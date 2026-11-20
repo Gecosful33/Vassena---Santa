@@ -81,6 +81,41 @@ def test_the_code_never_parses_strings_as_markup():
         assert sink not in script
 
 
+# --------------------------------------------------------------------------- colours
+#
+# The eight hues of the reference palette, light and dark. Their order is what keeps
+# neighbouring series apart for colour-blind readers, so it is fixed here: violet first
+# (the first house), orange second, blue moved to the seventh slot.
+
+PALETTE = {
+    "light": ["#6250d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#2a78d6", "#e34948"],
+    "dark": ["#9085e9", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c", "#3987e5", "#e66767"],
+}
+
+
+def _series(css: str) -> dict[str, list[str]]:
+    light, dark = css.split("@media (prefers-color-scheme: dark)", 1)
+    dark = dark.split("\n}\n", 1)[0]
+    return {
+        mode: [value for _, value in sorted(re.findall(r"--series-(\d):\s*(#[0-9a-f]{6});", block))]
+        for mode, block in (("light", light), ("dark", dark))
+    }
+
+
+def test_the_first_house_is_violet_and_the_palette_keeps_its_validated_order():
+    css = site._read("style.css")
+    assert _series(css) == PALETTE
+    slots = re.findall(r"^\.p(\d) \{ --hue: var\(--series-(\d)\); \}$", css, re.MULTILINE)
+    assert slots == [(str(n), str(n + 1)) for n in range(8)]  # house n wears slot n + 1
+
+
+def test_text_on_a_series_colour_is_a_token_with_a_value_for_each_mode():
+    css = site._read("style.css")
+    assert re.findall(r"--on-series:\s*(#[0-9a-f]{6});", css) == ["#ffffff", "#0b0b0b"]  # light, then dark
+    # Nothing writes white straight onto a series colour any more.
+    assert not re.search(r"background: var\(--hue\); color: #", css)
+
+
 # --------------------------------------------------------------------------- class names
 #
 # The stylesheet is one flat list of class names. Using the same word for two different

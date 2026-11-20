@@ -3,14 +3,15 @@
 Calendario unico delle case in affitto breve, alimentato ogni notte dai portali
 proprietari dei gestori (Krossbooking) e pubblicato come pagina web cifrata.
 
-- **La famiglia** apre la pagina con una password e vede, per ogni casa, quando ci sono
-  ospiti, quando le date sono bloccate e quando è libera.
+- **La famiglia** apre la pagina con una password e vede, per ogni casa, quando
+  arrivano i prossimi ospiti e, nel calendario, quando le date sono bloccate e quando
+  è libera.
 - **Chiunque della famiglia** può segnare dalla pagina chi usa una casa e quando, e
   correggere o togliere quanto già segnato: lo vedono subito tutti, e per ogni periodo
   la pagina dice se quelle date sono davvero bloccate sul portale del gestore.
 - **La proprietà** ha una seconda password che sblocca anche ricavi, commissioni e
-  netto, mese per mese e prenotazione per prenotazione, e l'elenco delle date che la
-  famiglia conta di usare ma che sono ancora in vendita.
+  netto, mese per mese e in totale sulle prenotazioni dell'anno, e l'elenco delle date
+  che la famiglia conta di usare ma che sono ancora in vendita.
 
 La pagina è raggiungibile da chiunque, ma contiene solo testo cifrato: senza password
 non si legge nulla, nemmeno i nomi delle case.
@@ -114,11 +115,11 @@ rifiutato: non si può limitare a un solo repository.
 
 | | Password di famiglia | Password della proprietà |
 |---|---|---|
-| Calendario unico delle case, stato di stanotte, prossimi periodi liberi | sì | sì |
+| Prossimi ospiti di ogni casa (chi c'è ora e i prossimi arrivi) e calendario unico | sì | sì |
 | Elenco soggiorni e blocchi, con canale e numero di ospiti | sì | sì |
 | «Chi usa la casa»: periodi della famiglia, inseribili e modificabili da tutti | sì | sì |
 | Date che la famiglia conta di usare ma ancora in vendita, con il link al portale | no | sì |
-| Statistiche mensili, grafico del netto, dettaglio economico per prenotazione | no | sì |
+| Statistiche mensili, grafico del netto, totali delle prenotazioni dell'anno | no | sì |
 
 ### Come si legge il calendario
 
@@ -134,7 +135,8 @@ Ogni barra porta la sigla della casa e, se c'è spazio, il numero di ospiti e il
 un testo che non entra non viene scritto (resta nel riquadro che si apre toccando il
 giorno e nella tabella dei soggiorni). Le barre piene sono soggiorni di ospiti, quelle
 chiare date bloccate. Gli stessi orari compaiono per esteso nel riquadro del giorno,
-nelle schede «stanotte» e nelle tabelle.
+nelle schede «Prossimi ospiti» e nelle tabelle. I colori seguono l'ordine delle case in
+`properties.toml`: la prima è viola, la seconda arancione.
 
 Gli orari si impostano in `properties.toml` con `check_in` e `check_out`: valgono per
 tutte le case, e una casa con orari diversi li ridefinisce nel proprio blocco.
