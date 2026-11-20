@@ -3,6 +3,10 @@
  * Days are integers (days since 1970-01-01, UTC arithmetic) so that daylight
  * saving never shifts a date. A stay covers the nights [start, end): `start`
  * is the check-in day, `end` the check-out day.
+ *
+ * Guests arrive from the house's check-in time and leave by its check-out time
+ * (15:00 and 11:00 unless configured otherwise). On the calendar a stay therefore
+ * runs from that hour of its first day to that hour of its last one.
  */
 var CaseCalLogic = (function () {
   "use strict";
@@ -38,11 +42,27 @@ var CaseCalLogic = (function () {
     return dayOf(+found.year, +found.month, +found.day);
   }
 
+  /** "15:00" -> minutes after midnight; anything else falls back to the given default. */
+  function clockMinutes(text, fallback) {
+    var match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(String(text || ""));
+    return match ? +match[1] * 60 + +match[2] : fallback;
+  }
+  function clockText(minutes) {
+    var h = Math.floor(minutes / 60), m = minutes % 60;
+    return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
+  }
+
   /** Turn one house of the family payload into the shape the views work with. */
   function prepare(raw) {
+    var checkIn = clockMinutes(raw.check_in, 15 * 60), checkOut = clockMinutes(raw.check_out, 11 * 60);
+    var hours = {
+      checkIn: clockText(checkIn), checkOut: clockText(checkOut),
+      // Where in the day cell a stay begins and ends: 15:00 is 62.5% of the way across.
+      inAt: checkIn / 1440, outAt: checkOut / 1440
+    };
     if (raw.missing) {
       return { id: raw.id, label: raw.label, unit: null, missing: true, stays: [],
-               from: null, to: null, fetchedAt: null };
+               from: null, to: null, fetchedAt: null, hours: hours };
     }
     var stays = raw.stays.map(function (row) {
       return { start: dayFromYmd(row[0]), end: dayFromYmd(row[1]),
@@ -53,8 +73,34 @@ var CaseCalLogic = (function () {
     stays.sort(function (a, b) { return a.start - b.start; });
     return {
       id: raw.id, label: raw.label, unit: raw.unit || null, missing: false, stays: stays,
-      from: dayFromYmd(raw.from), to: dayFromYmd(raw.to), fetchedAt: Date.parse(raw.fetched_at)
+      from: dayFromYmd(raw.from), to: dayFromYmd(raw.to), fetchedAt: Date.parse(raw.fetched_at),
+      hours: hours
     };
+  }
+
+  /**
+   * A one- or two-character mark for each house, unique among them: it is written on
+   * every bar so that telling the houses apart never rests on colour alone.
+   * Tries the first letter, then the initials of the first two words, then the first
+   * two letters; houses that still collide are numbered.
+   */
+  function badges(labels) {
+    var names = labels.map(function (label) { return String(label || "").trim(); });
+    var schemes = [
+      function (name) { return name.slice(0, 1).toUpperCase(); },
+      function (name) {
+        var words = name.split(/\s+/).filter(Boolean);
+        return words.length > 1 ? (words[0].slice(0, 1) + words[1].slice(0, 1)).toUpperCase() : "";
+      },
+      function (name) { return name.slice(0, 1).toUpperCase() + name.slice(1, 2).toLowerCase(); }
+    ];
+    for (var i = 0; i < schemes.length; i++) {
+      var marks = names.map(schemes[i]);
+      var distinct = {};
+      marks.forEach(function (mark) { distinct[mark] = true; });
+      if (marks.every(Boolean) && Object.keys(distinct).length === marks.length) return marks;
+    }
+    return names.map(function (_, index) { return String(index + 1); });
   }
 
   function covered(prop, day) { return !prop.missing && day >= prop.from && day < prop.to; }
@@ -158,11 +204,12 @@ var CaseCalLogic = (function () {
 
   /**
    * Bars to draw for one week row, in column units (0..7).
-   * A stay is drawn from the middle of its check-in day to the middle of its
-   * check-out day, so a same-day turnover shows as two bars meeting mid-cell.
+   * A stay is drawn from its check-in hour on the first day to its check-out hour on
+   * the last (`inAt` and `outAt` are fractions of a day), so a same-day turnover shows
+   * as two bars with the hours between check-out and check-in left open.
    * cutLeft / cutRight say the stay continues beyond this row.
    */
-  function weekSegments(stays, week) {
+  function weekSegments(stays, week, inAt, outAt) {
     var c0 = -1, c1 = -1;
     for (var c = 0; c < 7; c++) {
       if (week[c] !== null) { if (c0 < 0) c0 = c; c1 = c; }
@@ -172,19 +219,33 @@ var CaseCalLogic = (function () {
     var d0 = week[c0], limit = week[c1] + 1;
     for (var i = 0; i < stays.length; i++) {
       var stay = stays[i];
-      var xs = Math.max(stay.start + 0.5, d0);
-      var xe = Math.min(stay.end + 0.5, limit);
+      var xs = Math.max(stay.start + inAt, d0);
+      var xe = Math.min(stay.end + outAt, limit);
       if (xe <= xs) continue;
       segments.push({
         left: c0 + (xs - d0),
         right: c0 + (xe - d0),
         kind: stay.kind,
-        cutLeft: stay.start + 0.5 < d0,
-        cutRight: stay.end + 0.5 > limit,
+        cutLeft: stay.start + inAt < d0,
+        cutRight: stay.end + outAt > limit,
         stay: stay
       });
     }
     return segments;
+  }
+
+  /**
+   * Where a position in column units falls inside its day cell: { cell, part }.
+   * Cells are separated by gaps, so a bar edge cannot be a plain percentage of the
+   * row: it is "cell index" whole steps plus "part" of one cell. A right edge that
+   * sits exactly on a cell boundary belongs to the end of the previous cell.
+   */
+  function cellPosition(position, isRightEdge) {
+    var cell = Math.floor(position + 1e-9);
+    var part = position - cell;
+    if (part < 1e-9) part = 0;
+    if (isRightEdge && part === 0 && cell > 0) { cell -= 1; part = 1; }
+    return { cell: cell, part: part };
   }
 
   /** Is the page, or a single house, older than the nightly schedule allows? */
@@ -351,9 +412,9 @@ var CaseCalLogic = (function () {
     DAY_MS: DAY_MS,
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,
-    prepare: prepare, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
+    prepare: prepare, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
     freeWindows: freeWindows, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
-    weekSegments: weekSegments, freshness: freshness,
+    weekSegments: weekSegments, cellPosition: cellPosition, clockMinutes: clockMinutes, freshness: freshness,
     kpiYears: kpiYears, yearRows: yearRows, columnTotals: columnTotals, houseYear: houseYear, combine: combine,
     yearReservations: yearReservations, roleIndex: roleIndex, axisScale: axisScale
   };

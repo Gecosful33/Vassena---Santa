@@ -95,7 +95,6 @@
   function dayLabel(day) { return (sameYear(day) ? F.day : F.dayYear).format(dateOf(day)); }
   function shortLabel(day) { return (sameYear(day) ? F.short : F.shortYear).format(dateOf(day)); }
   function nights(n) { return n === 1 ? "1 notte" : F.int.format(n) + " notti"; }
-  function span(a, b) { return shortLabel(a) + " → " + shortLabel(b); }
   function euro(cents) { return cents === null || cents === undefined ? "–" : F.money.format(cents / 100); }
   function pct(ratio) { return ratio === null || ratio === undefined ? "–" : F.pct.format(ratio); }
 
@@ -209,7 +208,12 @@
     state.owner = opened.owner;
     state.remembered = remembered;
     state.props = opened.family.properties.map(L.prepare);
-    state.props.forEach(function (prop, index) { prop.index = index; });
+    // The mark stands in for the photo a booking app would show on each bar.
+    var marks = L.badges(state.props.map(function (prop) { return prop.label; }));
+    state.props.forEach(function (prop, index) {
+      prop.index = index;
+      prop.badge = marks[index];
+    });
     state.today = L.todayInZone(opened.family.tz, Date.now());
     document.title = opened.family.title || genericTitle;
     render();
@@ -292,6 +296,13 @@
   // Focusing a day with the keyboard scrolls it into view: follow it instead of closing.
   window.addEventListener("scroll", placeTip, { passive: true });
   window.addEventListener("resize", placeTip);
+  // Bars change width with the window, so what fits inside them does too.
+  var refit = 0;
+  window.addEventListener("resize", function () {
+    if (!state || !state.family) return;
+    cancelAnimationFrame(refit);
+    refit = requestAnimationFrame(fitLabels);
+  });
 
   /* ---------- shared pieces ---------- */
 
@@ -325,18 +336,29 @@
     return parts.join(" · ");
   }
 
-  /** Words for one house on one calendar day (tooltip and screen reader share them). */
+  /**
+   * Words for one house on one calendar day (tooltip and screen reader share them).
+   * Hours are spelled out: a stay runs from the house's check-in time on its first day
+   * to its check-out time on its last, which is what the bars draw.
+   */
   function describe(prop, day) {
-    var info = L.dayInfo(prop, day);
+    var info = L.dayInfo(prop, day), hours = prop.hours;
     var detail = "";
     if (info.state === "free") {
       var status = L.nightStatus(prop, day);
-      var until = status.open ? "nessuna prenotazione successiva"
-        : "fino a " + shortLabel(status.until) + ", " + nights(status.until - day);
-      detail = (info.leaving ? "dal pomeriggio (check-out al mattino), " : "") + until;
+      var parts = [];
+      if (info.leaving) parts.push("dalle " + hours.checkOut + " (check-out al mattino)");
+      parts.push(status.open ? "nessuna prenotazione successiva"
+        : "fino alle " + hours.checkIn + " di " + dayLabel(status.until) + ", " + nights(status.until - day));
+      detail = parts.join(", ");
     } else if (info.state === "booking" || info.state === "closed") {
-      detail = span(info.night.start, info.night.end) + ", " + nights(info.night.end - info.night.start);
-      if (info.night.start === day) detail += info.leaving ? ", cambio in giornata" : ", inizio in giornata";
+      var stay = info.night;
+      detail = "dalle " + hours.checkIn + " di " + dayLabel(stay.start) + " alle " + hours.checkOut + " di " +
+        dayLabel(stay.end) + ", " + nights(stay.end - stay.start);
+      if (stayDetails(stay)) detail += ", " + stayDetails(stay);
+      if (stay.start === day && info.leaving) {
+        detail += ". Cambio in giornata: uscita entro le " + hours.checkOut + ", ingresso dalle " + hours.checkIn;
+      }
     }
     return { status: STATE_TEXT[info.state], detail: detail };
   }
@@ -401,14 +423,15 @@
     if (status.state === "free") {
       title = "Libera stanotte";
       rest = status.open ? "nessuna prenotazione successiva"
-        : "fino a " + dayLabel(status.until) + " (" + nights(status.until - state.today) + ")";
+        : "fino alle " + prop.hours.checkIn + " di " + dayLabel(status.until) + " (" + nights(status.until - state.today) + ")";
     } else if (status.state === "unknown") {
       title = "Dato non disponibile";
       rest = "il calendario del gestore non copre la data di oggi";
     } else {
       title = status.state === "closed" ? "Bloccata stanotte" : "Ospiti in casa stanotte";
       rest = (status.state === "closed" ? "chiusa alla vendita, senza ospiti · " : "") +
-        (status.until === null ? "nessuna notte libera nel periodo noto" : "prima notte libera " + dayLabel(status.until));
+        (status.until === null ? "nessuna notte libera nel periodo noto"
+          : "libera dalle " + prop.hours.checkOut + " di " + dayLabel(status.until));
     }
     return el("p", { class: "now" }, icon(status.state), el("span", null, el("strong", { text: title }), " · " + rest));
   }
@@ -433,12 +456,16 @@
     var shown = expanded ? windows : windows.slice(0, WINDOWS_SHOWN);
     append(card, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
-        el("th", { scope: "col", text: "Dal" }), el("th", { scope: "col", text: "Al" }),
+        el("th", { scope: "col", text: "Da" }), el("th", { scope: "col", text: "A" }),
         el("th", { scope: "col", class: "num", text: "Notti" }))),
       el("tbody", null, shown.map(function (w) {
+        // The house empties at check-out time and fills again at the next check-in time.
+        var afterCheckout = !!L.dayInfo(prop, w.start).leaving;
         return el("tr", null,
-          el("td", { text: w.start === state.today ? "oggi" : dayLabel(w.start) }),
-          el("td", { text: w.open ? "in poi" : dayLabel(w.end) }),
+          el("td", null, w.start === state.today ? "oggi" : dayLabel(w.start),
+            afterCheckout ? el("span", { class: "sub", text: "dalle " + prop.hours.checkOut }) : null),
+          el("td", null, w.open ? "in poi" : dayLabel(w.end),
+            w.open ? null : el("span", { class: "sub", text: "fino alle " + prop.hours.checkIn })),
           el("td", { class: "num", text: w.open ? "–" : F.int.format(w.nights) }));
       }))));
     if (windows.length > WINDOWS_SHOWN) {
@@ -456,16 +483,62 @@
     return el("section", { class: "houses", "aria-label": "Disponibilità" }, visible().map(houseCard));
   }
 
-  function legend(props, withStates) {
-    return el("div", { class: "legend" },
-      props.map(function (prop) {
-        return el("span", { class: "p" + prop.index }, el("i", { class: "swatch" }),
-          prop.label + (withStates ? ": ospiti" : ""));
-      }),
-      withStates ? el("span", null,
-        el("span", { class: "pair" }, props.map(function (prop) { return el("i", { class: "swatch closed p" + prop.index }); })),
-        "Bloccata: linea sottile (chiusa alla vendita, senza ospiti)") : null,
-      withStates ? el("span", null, el("i", { class: "swatch free" }), "Libera (nessuna barra)") : null);
+  function seriesLegend(props) {
+    return el("div", { class: "legend" }, props.map(function (prop) {
+      return el("span", { class: "p" + prop.index }, el("i", { class: "swatch" }), prop.label);
+    }));
+  }
+
+  var GAP = 4; // px between day tiles; the stylesheet's --gap must say the same
+
+  /**
+   * A horizontal position in a row of `columns` day tiles, as the inside of a calc().
+   * Tiles are separated by gaps, so the position is whole steps (a tile plus a gap)
+   * plus a share of one tile.
+   */
+  function edge(position, isRightEdge, columns) {
+    var at = L.cellPosition(position, isRightEdge);
+    return at.cell + " * (100% + " + GAP + "px) / " + columns + " + " +
+      at.part.toFixed(5) + " * (100% - " + ((columns - 1) * GAP) + "px) / " + columns;
+  }
+  function place(node, left, right, columns) {
+    node.style.left = "calc(" + edge(left, false, columns) + ")";
+    node.style.width = "calc((" + edge(right, true, columns) + ") - (" + edge(left, false, columns) + "))";
+  }
+
+  /** Legend of the calendar: who is who, what a bar means, and at what hour it starts and ends. */
+  function calendarKey(props) {
+    var first = props[0].hours;
+    var sameHours = props.every(function (prop) {
+      return prop.hours.checkIn === first.checkIn && prop.hours.checkOut === first.checkOut;
+    });
+    // A three-day stay drawn to scale: in at check-in time, out at check-out time.
+    var sample = el("i", { class: "bar booking" });
+    place(sample, first.inAt, 2 + first.outAt, 3);
+    var arrives = el("span", { class: "cap", text: first.checkIn });
+    arrives.style.left = "calc(" + edge(first.inAt, false, 3) + ")";
+    var leaves = el("span", { class: "cap", text: first.checkOut });
+    leaves.style.left = "calc(" + edge(2 + first.outAt, true, 3) + ")";
+    var art = el("div", { class: "keyart p" + props[0].index, "aria-hidden": "true" },
+      el("i", { class: "keytile" }), el("i", { class: "keytile" }), el("i", { class: "keytile" }), sample, arrives, leaves);
+
+    var words = sameHours
+      ? [el("strong", { text: "Check-in dalle " + first.checkIn + ", check-out entro le " + first.checkOut + "." }),
+         " Ogni barra inizia e finisce a quell'ora: nei cambi in giornata restano scoperte le ore in mezzo."]
+      : [el("strong", { text: "Ogni barra inizia all'ora di check-in e finisce all'ora di check-out." }), " " +
+         props.map(function (prop) {
+           return prop.label + ": dalle " + prop.hours.checkIn + ", entro le " + prop.hours.checkOut;
+         }).join("; ") + "."];
+
+    return el("div", { class: "key" },
+      el("div", { class: "legend" },
+        props.map(function (prop) {
+          return el("span", { class: "p" + prop.index }, el("b", { class: "tag", text: prop.badge }), prop.label);
+        }),
+        el("span", null, el("i", { class: "chip solid" }), "Ospiti"),
+        el("span", null, el("i", { class: "chip pale" }), "Bloccata (chiusa alla vendita, senza ospiti)"),
+        el("span", null, el("i", { class: "chip none" }), "Libera")),
+      el("div", { class: "hours" }, art, el("p", null, words)));
   }
 
   function dayTip(day, props) {
@@ -478,6 +551,14 @@
     }));
   }
 
+  /** What may be written inside a stay's bar, longest first; the first that fits is used. */
+  function barLabels(stay) {
+    if (stay.kind === "closed") return ["Bloccata"];
+    var guests = stay.guests === null || stay.guests === undefined ? "" : guestsLabel(stay.guests);
+    if (guests && stay.channel) return [guests + " · " + stay.channel, guests];
+    return guests ? [guests] : (stay.channel ? [stay.channel] : []);
+  }
+
   function monthBlock(month, props, focusDay) {
     var first = L.dayOf(month.y, month.m, 1);
     var block = el("section", { class: "month" + (first + L.daysInMonth(month.y, month.m) <= state.today ? " past" : "") },
@@ -485,7 +566,7 @@
       el("div", { class: "dow", "aria-hidden": "true" }, DOW.map(function (letter) { return el("span", { text: letter }); })));
     L.monthWeeks(month.y, month.m).forEach(function (week) {
       var cells = el("div", { class: "cells" }, week.map(function (day, column) {
-        if (day === null) return el("span", { class: "pad" + (column >= 5 ? " we" : "") });
+        if (day === null) return el("span", { class: "pad" });
         var spoken = F.long.format(dateOf(day)) + ". " + props.map(function (prop) {
           var words = describe(prop, day);
           return prop.label + ": " + words.status + (words.detail ? ", " + words.detail : "");
@@ -496,15 +577,16 @@
         }, el("span", { class: "n", text: String(L.parts(day).d) }));
       }));
       var lanes = el("div", { class: "lanes", "aria-hidden": "true" }, props.map(function (prop) {
-        return el("div", { class: "lane p" + prop.index }, L.weekSegments(prop.stays, week).map(function (segment) {
-          var bar = el("i", {
-            class: "bar" + (segment.kind === "closed" ? " closed" : "") + (segment.cutLeft ? " cut-l" : "") +
-              (segment.cutRight ? " cut-r" : "") + (segment.stay.end <= state.today ? " past" : "")
-          });
-          // 1px inset on every real end leaves the 2px surface gap between touching stays.
-          var insetLeft = segment.cutLeft ? 0 : 1, insetRight = segment.cutRight ? 0 : 1;
-          bar.style.left = "calc(" + (segment.left / 7 * 100).toFixed(4) + "% + " + insetLeft + "px)";
-          bar.style.width = "calc(" + ((segment.right - segment.left) / 7 * 100).toFixed(4) + "% - " + (insetLeft + insetRight) + "px)";
+        var segments = L.weekSegments(prop.stays, week, prop.hours.inAt, prop.hours.outAt);
+        return el("div", { class: "lane p" + prop.index }, segments.map(function (segment) {
+          var stay = segment.stay;
+          var bar = el("div", {
+            class: "bar " + (segment.kind === "closed" ? "closed" : "booking") + (segment.cutLeft ? " cut-l" : "") +
+              (segment.cutRight ? " cut-r" : "") + (stay.end <= state.today ? " past" : ""),
+            "data-stay": prop.index + ":" + stay.start, "data-from": String(stay.start), "data-to": String(stay.end)
+          }, el("b", { class: "tag", text: prop.badge }), el("span", { class: "txt" }));
+          bar.labels = barLabels(stay);
+          place(bar, segment.left, segment.right, 7);
           return bar;
         }));
       }));
@@ -513,9 +595,36 @@
     return block;
   }
 
+  /**
+   * Write a label inside each stay's bar, but only where it really fits: text is
+   * measured against the bar, never clipped. A stay drawn over several rows gets its
+   * label once, on the first piece wide enough; a piece too short even for the
+   * house's initial shows the bare bar.
+   */
+  function fitLabels() {
+    var placed = {};
+    var bars = root.querySelectorAll(".months .bar");
+    for (var i = 0; i < bars.length; i++) {
+      var bar = bars[i], tag = bar.firstChild, text = bar.lastChild;
+      text.textContent = "";
+      tag.hidden = false;
+      var room = bar.getBoundingClientRect();
+      var padding = parseFloat(getComputedStyle(bar).paddingRight) || 0;
+      if (tag.getBoundingClientRect().right > room.right - 2) { tag.hidden = true; continue; }
+      var stayKey = bar.getAttribute("data-stay");
+      if (placed[stayKey]) continue;
+      var labels = bar.labels || [];
+      for (var j = 0; j < labels.length; j++) {
+        text.textContent = labels[j];
+        if (text.getBoundingClientRect().right <= room.right - padding) { placed[stayKey] = true; break; }
+        text.textContent = "";
+      }
+    }
+  }
+
   function calendar() {
     var props = readable();
-    var section = el("section", { class: "card" });
+    var section = el("section", { class: "card calendar" });
     var key = "past-months";
     append(section, el("div", { class: "section-head" },
       el("h2", { text: "Calendario" }),
@@ -528,7 +637,7 @@
       append(section, el("p", { class: "empty", text: "Nessun calendario da mostrare." }));
       return section;
     }
-    append(section, legend(props, true));
+    append(section, calendarKey(props));
     var today = L.parts(state.today);
     var to = Math.max.apply(null, props.map(function (prop) { return prop.to; }));
     var from = state.showPast ? Math.min.apply(null, props.map(function (prop) { return prop.from; }))
@@ -537,8 +646,9 @@
     var focusDay = state.today >= from && state.today < to ? state.today : from;
     var grid = el("div", { class: "months" + (props.length === 1 ? " single" : "") },
       months.map(function (month) { return monthBlock(month, props, focusDay); }));
-    var laneHeight = props.length === 1 ? 12 : 8;
-    grid.style.setProperty("--lanes-h", (props.length * laneHeight + (props.length - 1) * 3) + "px");
+    var laneHeight = props.length === 1 ? 26 : 20;
+    grid.style.setProperty("--lane-h", laneHeight + "px");
+    grid.style.setProperty("--lanes-h", (props.length * laneHeight + (props.length - 1) * GAP) + "px");
 
     attachTips(grid, ".day", function (node) { return dayTip(Number(node.getAttribute("data-day")), props); });
     grid.addEventListener("keydown", function (event) {
@@ -557,7 +667,7 @@
   }
 
   /** Stays as a table. Rows are grouped by check-in year so that dates stay short on a phone. */
-  function stayRows(stays) {
+  function stayRows(stays, prop) {
     var year = L.parts(state.today).y;
     var rows = [];
     stays.forEach(function (stay) {
@@ -577,7 +687,8 @@
     });
     return el("table", { class: "rows" },
       el("thead", null, el("tr", null,
-        el("th", { scope: "col", text: "Dal" }), el("th", { scope: "col", text: "Al" }),
+        el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
+        el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
         el("th", { scope: "col", class: "num", text: "Notti" }), el("th", { scope: "col", text: "Stato" }))),
       el("tbody", null, rows));
   }
@@ -595,13 +706,13 @@
         var key = "past-stays:" + prop.id;
         return el("div", { class: "p" + prop.index },
           el("h3", null, el("i", { class: "swatch" }), prop.label),
-          upcoming.length ? stayRows(upcoming) : el("p", { class: "empty", text: "Nessun soggiorno in programma." }),
+          upcoming.length ? stayRows(upcoming, prop) : el("p", { class: "empty", text: "Nessun soggiorno in programma." }),
           past.length ? el("button", {
             class: "btn quiet more", type: "button", "data-key": key, "aria-expanded": String(open),
             text: open ? "Nascondi i soggiorni passati" : "Mostra i soggiorni passati (" + past.length + ")",
             onclick: function () { state.pastStays[prop.id] = !open; render(key); }
           }) : null,
-          open && past.length ? stayRows(past) : null);
+          open && past.length ? stayRows(past, prop) : null);
       })));
   }
 
@@ -701,7 +812,7 @@
     for (var n = 1; n <= 12; n++) months.push(el("span", { text: F.monthShort.format(dateOf(L.dayOf(year, n, 1))).replace(".", "") }));
     return el("figure", { class: "chart" },
       el("figcaption", { text: "Netto proprietario per mese · " + year }),
-      series.length > 1 ? legend(series.map(function (s) { return s.prop; }), false) : null,
+      series.length > 1 ? seriesLegend(series.map(function (s) { return s.prop; })) : null,
       el("div", { class: "plot" }, yaxis, area, el("div", { class: "xaxis", "aria-hidden": "true" }, months)));
   }
 
@@ -850,6 +961,7 @@
     return el("footer", { class: "foot" },
       el("p", { text: "«Libera»: nessuna prenotazione e nessun blocco nel portale del gestore all'ultimo aggiornamento. Resta in vendita, quindi può essere prenotata da ospiti in qualsiasi momento: prima di organizzarti fai bloccare le date." }),
       el("p", { text: "«Bloccata»: date chiuse alla vendita dal proprietario o dal gestore, senza ospiti." }),
+      el("p", { text: "Gli orari di check-in e check-out sono quelli della casa: un soggiorno occupa la casa dall'ora di ingresso del primo giorno all'ora di uscita dell'ultimo." }),
       state.family.note ? el("p", { text: state.family.note }) : null);
   }
 
@@ -860,6 +972,7 @@
     root.appendChild(el("div", { class: "shell" },
       header(), banners(), filterBar(), availability(), calendar(), staysSection(), ownerSection(), footer()));
     window.scrollTo(0, scroll);
+    fitLabels();
     if (!focusKey) return;
     var marked = root.querySelectorAll("[data-key]");
     for (var i = 0; i < marked.length; i++) {

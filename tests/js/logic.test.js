@@ -112,33 +112,102 @@ test("months between spans year boundaries", () => {
   assert.deepEqual(L.monthsBetween(day("2026-11-20"), day("2026-11-20")), []);
 });
 
-test("bars run from mid check-in day to mid check-out day", () => {
-  const p = house([["2026-08-04", "2026-08-06", "b"]]);
-  const week = L.monthWeeks(2026, 8)[1]; // Mon 3 .. Sun 9
-  const [segment] = L.weekSegments(p.stays, week);
-  assert.deepEqual([segment.left, segment.right, segment.cutLeft, segment.cutRight], [1.5, 3.5, false, false]);
+/* ---- bars: from the check-in hour of the first day to the check-out hour of the last ---- */
+
+const IN = 15 / 24, OUT = 11 / 24; // 15:00 and 11:00 as fractions of a day
+const near = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-9, `${actual} is not ${expected}`);
+
+test("house hours default to 15:00 and 11:00 and can be configured", () => {
+  const usual = house([]);
+  assert.deepEqual([usual.hours.checkIn, usual.hours.checkOut], ["15:00", "11:00"]);
+  near(usual.hours.inAt, 0.625);
+  near(usual.hours.outAt, 11 / 24);
+  const late = L.prepare({ id: "a", label: "A", fetched_at: "2026-06-01T02:00:00Z", from: "2026-01-01", to: "2027-01-01",
+    stays: [], check_in: "16:30", check_out: "09:00" });
+  assert.deepEqual([late.hours.checkIn, late.hours.checkOut], ["16:30", "09:00"]);
+  near(late.hours.inAt, 16.5 / 24);
+  near(late.hours.outAt, 9 / 24);
+  // Anything unreadable falls back to the usual hours instead of drawing nonsense.
+  const odd = L.prepare({ id: "a", label: "A", fetched_at: "2026-06-01T02:00:00Z", from: "2026-01-01", to: "2027-01-01",
+    stays: [], check_in: "3pm", check_out: "25:00" });
+  assert.deepEqual([odd.hours.checkIn, odd.hours.checkOut], ["15:00", "11:00"]);
+  // A house that could not be read still has hours, so nothing breaks around it.
+  assert.equal(L.prepare({ id: "x", label: "X", missing: true }).hours.checkIn, "15:00");
 });
 
-test("a same-day turnover gives two bars meeting mid-cell", () => {
+test("a bar starts at the check-in hour and ends at the check-out hour", () => {
+  const p = house([["2026-08-04", "2026-08-06", "b"]]);
+  const week = L.monthWeeks(2026, 8)[1]; // Mon 3 .. Sun 9
+  const [segment] = L.weekSegments(p.stays, week, IN, OUT);
+  near(segment.left, 1 + 15 / 24);  // Tuesday 4, 15:00
+  near(segment.right, 3 + 11 / 24); // Thursday 6, 11:00
+  assert.deepEqual([segment.cutLeft, segment.cutRight], [false, false]);
+});
+
+test("a one-night stay spans an afternoon, a night and a morning", () => {
+  const p = house([["2026-08-04", "2026-08-05", "b"]]);
+  const [segment] = L.weekSegments(p.stays, L.monthWeeks(2026, 8)[1], IN, OUT);
+  near(segment.right - segment.left, 1 - 15 / 24 + 11 / 24); // 20 hours
+});
+
+test("a same-day turnover leaves the hours between check-out and check-in open", () => {
   const p = house([["2026-08-03", "2026-08-05", "b"], ["2026-08-05", "2026-08-08", "b"]]);
-  const segments = L.weekSegments(p.stays, L.monthWeeks(2026, 8)[1]);
+  const segments = L.weekSegments(p.stays, L.monthWeeks(2026, 8)[1], IN, OUT);
   assert.equal(segments.length, 2);
-  assert.equal(segments[0].right, 2.5);
-  assert.equal(segments[1].left, 2.5);
+  near(segments[0].right, 2 + 11 / 24); // out by 11:00 on Wednesday 5
+  near(segments[1].left, 2 + 15 / 24);  // in from 15:00 the same day
+  near(segments[1].left - segments[0].right, 4 / 24); // four hours for the cleaning
 });
 
 test("bars are cut at week and month edges", () => {
   const p = house([["2026-05-30", "2026-06-01", "b"]]);
   const mayRows = L.monthWeeks(2026, 5);
-  const [inMay] = L.weekSegments(p.stays, mayRows[mayRows.length - 1]); // Mon 25 .. Sun 31
-  assert.deepEqual([inMay.left, inMay.right, inMay.cutLeft, inMay.cutRight], [5.5, 7, false, true]);
-  const [inJune] = L.weekSegments(p.stays, L.monthWeeks(2026, 6)[0]); // Mon 1 June
-  assert.deepEqual([inJune.left, inJune.right, inJune.cutLeft, inJune.cutRight], [0, 0.5, true, false]);
+  const [inMay] = L.weekSegments(p.stays, mayRows[mayRows.length - 1], IN, OUT); // Mon 25 .. Sun 31
+  near(inMay.left, 5 + 15 / 24);
+  assert.deepEqual([inMay.right, inMay.cutLeft, inMay.cutRight], [7, false, true]);
+  const [inJune] = L.weekSegments(p.stays, L.monthWeeks(2026, 6)[0], IN, OUT); // Mon 1 June
+  near(inJune.right, 11 / 24);
+  assert.deepEqual([inJune.left, inJune.cutLeft, inJune.cutRight], [0, true, false]);
+});
+
+test("a stay that checks out on a Monday still shows its last morning", () => {
+  const p = house([["2026-08-07", "2026-08-10", "b"]]); // Fri 7 -> Mon 10
+  const [tail] = L.weekSegments(p.stays, L.monthWeeks(2026, 8)[2], IN, OUT); // Mon 10 .. Sun 16
+  near(tail.right, 11 / 24);
+  assert.deepEqual([tail.left, tail.cutLeft, tail.cutRight], [0, true, false]);
+});
+
+test("other house hours move the ends of the bar", () => {
+  const p = house([["2026-08-04", "2026-08-06", "c"]]);
+  const [segment] = L.weekSegments(p.stays, L.monthWeeks(2026, 8)[1], 17 / 24, 10 / 24);
+  near(segment.left, 1 + 17 / 24);
+  near(segment.right, 3 + 10 / 24);
+  assert.equal(segment.kind, "closed");
 });
 
 test("a stay elsewhere in the year draws nothing in an unrelated week", () => {
   const p = house([["2026-05-30", "2026-06-01", "b"]]);
-  assert.deepEqual(L.weekSegments(p.stays, L.monthWeeks(2026, 8)[1]), []);
+  assert.deepEqual(L.weekSegments(p.stays, L.monthWeeks(2026, 8)[1], IN, OUT), []);
+});
+
+test("a position is split into whole tiles and a share of one", () => {
+  assert.deepEqual(L.cellPosition(1.625, false), { cell: 1, part: 0.625 });
+  assert.deepEqual(L.cellPosition(0, false), { cell: 0, part: 0 });
+  assert.deepEqual(L.cellPosition(3, false), { cell: 3, part: 0 }); // a left edge on a boundary opens the next tile
+  assert.deepEqual(L.cellPosition(3, true), { cell: 2, part: 1 });  // a right edge on it closes the previous one
+  assert.deepEqual(L.cellPosition(7, true), { cell: 6, part: 1 });  // the end of the week row
+  const morning = L.cellPosition(4 + 11 / 24, true);
+  assert.equal(morning.cell, 4);
+  near(morning.part, 11 / 24);
+});
+
+test("each house gets a short mark that no other house shares", () => {
+  assert.deepEqual(L.badges(["Santa", "Vassena"]), ["S", "V"]);
+  assert.deepEqual(L.badges(["Casa Mare", "Casa Lago"]), ["CM", "CL"]); // same first letter: word initials
+  assert.deepEqual(L.badges(["Mare", "Monti"]), ["Ma", "Mo"]);          // one word each: two letters
+  assert.deepEqual(L.badges(["Casa", "Casa"]), ["1", "2"]);             // nothing tells them apart: numbers
+  assert.deepEqual(L.badges(["  lago "]), ["L"]);
+  assert.deepEqual(L.badges([]), []);
 });
 
 test("freshness flags a missed nightly run and a house left behind", () => {

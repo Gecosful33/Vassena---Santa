@@ -101,7 +101,9 @@ def collect(
             properties.append(fetched[prop.id])
         elif prop.id in previous:
             stale = previous[prop.id]
+            # Name and house rules are configuration: the current ones win over the stored copy.
             stale.label = prop.label
+            stale.check_in_time, stale.check_out_time = prop.check_in, prop.check_out
             properties.append(stale)
             report.reused.append(prop.id)
         else:

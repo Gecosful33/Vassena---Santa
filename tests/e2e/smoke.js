@@ -53,6 +53,52 @@ async function main() {
     fs.mkdirSync(shotDir, { recursive: true });
     await page.screenshot({ path: path.join(shotDir, name + ".png"), fullPage });
   }
+  /**
+   * The calendar's promise: every bar starts at the check-in hour of its first day and
+   * ends at the check-out hour of its last one. Checked against the real layout.
+   */
+  async function barsFollowTheHouseHours(page) {
+    const report = await page.evaluate(() => {
+      const IN = 15 / 24, OUT = 11 / 24;
+      const result = { starts: 0, ends: 0, worst: 0, clipped: [], turnovers: 0 };
+      const rowOf = (bar) => bar.closest(".week");
+      for (const bar of document.querySelectorAll(".months .bar")) {
+        const box = bar.getBoundingClientRect();
+        const tile = (day) => rowOf(bar).querySelector(`.day[data-day="${day}"]`);
+        if (!bar.classList.contains("cut-l")) {
+          const first = tile(bar.dataset.from).getBoundingClientRect();
+          result.worst = Math.max(result.worst, Math.abs(box.left - (first.left + IN * first.width)));
+          result.starts++;
+        }
+        if (!bar.classList.contains("cut-r")) {
+          const last = tile(bar.dataset.to).getBoundingClientRect();
+          result.worst = Math.max(result.worst, Math.abs(box.right - (last.left + OUT * last.width)));
+          result.ends++;
+        }
+        const text = bar.querySelector(".txt");
+        if (text.textContent && text.getBoundingClientRect().right > box.right + 0.5) result.clipped.push(text.textContent);
+        const tag = bar.querySelector(".tag");
+        if (!tag.hidden && tag.getBoundingClientRect().right > box.right + 0.5) result.clipped.push("tag");
+      }
+      // Same-day turnovers: the bar that leaves must stop before the one that arrives begins.
+      for (const lane of document.querySelectorAll(".months .lane")) {
+        const bars = [...lane.querySelectorAll(".bar")];
+        for (let i = 1; i < bars.length; i++) {
+          if (bars[i - 1].dataset.to !== bars[i].dataset.from) continue;
+          const gap = bars[i].getBoundingClientRect().left - bars[i - 1].getBoundingClientRect().right;
+          const width = lane.closest(".week").querySelector(".day").getBoundingClientRect().width;
+          result.worst = Math.max(result.worst, Math.abs(gap - (IN - OUT) * width));
+          result.turnovers++;
+        }
+      }
+      return result;
+    });
+    assert.ok(report.starts > 5 && report.ends > 5, "bars with real starts and ends were measured");
+    assert.ok(report.turnovers > 0, "the demo contains a same-day turnover");
+    assert.ok(report.worst < 1, `a bar is ${report.worst.toFixed(2)}px away from its hour`);
+    assert.deepEqual(report.clipped, [], "labels that do not fit must not be drawn");
+  }
+
   async function noSidewaysScroll(page) {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px`);
@@ -74,7 +120,14 @@ async function main() {
   await page.waitForSelector(".shell");
   assert.equal(await page.locator(".house").count(), 2);
   assert.ok((await page.locator(".month").count()) >= 2, "months rendered");
-  assert.ok((await page.locator(".bar").count()) > 5, "stays drawn as bars");
+  assert.ok((await page.locator(".months .bar").count()) > 5, "stays drawn as bars");
+  assert.match(await page.textContent(".hours"), /Check-in dalle 15:00, check-out entro le 11:00/);
+  assert.deepEqual(await page.locator(".keyart .cap").allTextContents(), ["15:00", "11:00"]);
+  await barsFollowTheHouseHours(page);
+  const labels = await page.locator(".months .bar .txt").allTextContents();
+  assert.ok(labels.some((text) => /ospiti/.test(text)), "guest counts written inside bars");
+  assert.ok(labels.includes("Bloccata"), "blocked periods labelled");
+  assert.match(await page.textContent(".stays thead"), /Check-indalle 15:00Check-outentro le 11:00/);
   assert.equal(await page.locator(".day.today").count(), 1);
   assert.equal(await page.locator(".owner-lock").count(), 1, "economics stay locked for the family");
   assert.equal(await page.locator(".tiles").count(), 0);
@@ -85,6 +138,8 @@ async function main() {
   await page.hover(".day.today");
   await page.waitForSelector(".tip:not([hidden])");
   assert.equal(await page.locator(".tip .tip-row").count(), 2, "one readout row per house");
+  assert.match(await page.textContent(".tip"), /Ospiti · Casa Maredalle 15:00 di .+ alle 11:00 di /);
+  assert.match(await page.textContent(".tip"), /Libera · Casa Lagodalle 11:00 \(check-out al mattino\)/);
   await shot(page, "03-tooltip", false);
 
   await page.focus(".day.today");
@@ -94,11 +149,12 @@ async function main() {
   assert.equal(Number(after), Number(before) + 1, "arrow keys walk the days");
   assert.match(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), /Casa Mare: .+ Casa Lago: /);
 
-  const barsBefore = await page.locator(".bar").count();
+  const barsBefore = await page.locator(".months .bar").count();
   await page.locator(".seg input[name=filter]").nth(2).check({ force: true });
   await page.waitForFunction(() => document.querySelectorAll(".house").length === 1);
   assert.equal(await page.locator(".months.single").count(), 1);
-  assert.ok((await page.locator(".bar").count()) < barsBefore, "the filter removes the other house's bars");
+  assert.ok((await page.locator(".months .bar").count()) < barsBefore, "the filter removes the other house's bars");
+  await barsFollowTheHouseHours(page);
   assert.equal(await page.locator(".lane.p1").count() > 0, true, "the remaining house keeps its own hue");
   assert.equal(await page.locator(".lane.p0").count(), 0);
   await shot(page, "04-filter-one-house");
@@ -148,7 +204,15 @@ async function main() {
   await page.waitForSelector(".tiles");
   assert.equal(await page.locator(".house").count(), 2);
   await noSidewaysScroll(page);
+  await barsFollowTheHouseHours(page);
   await shot(page, "06-owner-phone-dark");
+  // Bars are narrower in landscape or after a resize: labels must be fitted again.
+  await page.setViewportSize({ width: 844, height: 390 });
+  await page.waitForTimeout(150);
+  await barsFollowTheHouseHours(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(150);
+  await barsFollowTheHouseHours(page);
   await page.locator(".day.today").tap();
   await page.waitForSelector(".tip:not([hidden])");
   await shot(page, "07-phone-tooltip", false);

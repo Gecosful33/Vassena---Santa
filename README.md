@@ -77,6 +77,25 @@ proprietà solo a chi deve vedere i conti.
 | Elenco soggiorni e blocchi, con canale e numero di ospiti | sì | sì |
 | Statistiche mensili, grafico del netto, dettaglio economico per prenotazione | no | sì |
 
+### Come si legge il calendario
+
+I giorni sono tessere e ogni soggiorno è una barra arrotondata stesa sopra di esse,
+come nel calendario dell'app di Airbnb. La barra è in scala con l'orologio: **inizia
+all'ora di check-in del primo giorno e finisce all'ora di check-out dell'ultimo**
+(15:00 e 11:00). Si vede quindi a colpo d'occhio che il giorno di arrivo è libero fino
+al pomeriggio e quello di partenza lo torna dalla tarda mattinata; in un cambio in
+giornata le due barre non si toccano e resta scoperto l'intervallo fra uscita e
+ingresso.
+
+Ogni barra porta la sigla della casa e, se c'è spazio, il numero di ospiti e il canale;
+un testo che non entra non viene scritto (resta nel riquadro che si apre toccando il
+giorno e nella tabella dei soggiorni). Le barre piene sono soggiorni di ospiti, quelle
+chiare date bloccate. Gli stessi orari compaiono per esteso nel riquadro del giorno,
+nelle schede «stanotte» e nelle tabelle.
+
+Gli orari si impostano in `properties.toml` con `check_in` e `check_out`: valgono per
+tutte le case, e una casa con orari diversi li ridefinisce nel proprio blocco.
+
 Tre stati, con lo stesso nome ovunque:
 
 - **Ospiti**: c'è una prenotazione.
@@ -209,7 +228,8 @@ portali, nomi, indirizzi o importi veri.
 
 ### Aggiungere una casa
 
-1. Un nuovo blocco `[[property]]` in `properties.toml` (`id`, `label`, `env`).
+1. Un nuovo blocco `[[property]]` in `properties.toml` (`id`, `label`, `env`; facoltativi
+   `check_in` e `check_out` se gli orari differiscono da quelli generali).
 2. I tre secret `<ENV>_KB_URL`, `<ENV>_KB_USER`, `<ENV>_KB_PASS`.
 3. Le stesse tre righe nel passo «Leggi i portali» di
    `.github/workflows/nightly.yml` (un test verifica che non manchino).

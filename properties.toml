@@ -10,6 +10,12 @@ timezone = "Europe/Rome"
 # Anni futuri da leggere oltre a quello corrente.
 years_ahead = 1
 
+# Orari della casa: gli ospiti entrano dalle check_in ed escono entro le check_out.
+# Nel calendario ogni soggiorno inizia e finisce esattamente a queste ore. Valgono per
+# tutte le case; una casa con orari diversi li ridefinisce nel proprio blocco [[property]].
+check_in = "15:00"
+check_out = "11:00"
+
 # Nota facoltativa mostrata in fondo alla pagina (finisce cifrata, ma qui è in chiaro).
 # note = "Per usare una casa scrivi nel gruppo di famiglia."
 

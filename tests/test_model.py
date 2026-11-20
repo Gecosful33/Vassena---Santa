@@ -164,7 +164,8 @@ def test_timestamps_must_be_timezone_aware():
 def test_the_family_payload_carries_no_economics():
     payload = Snapshot(generated_at=NOW, properties=[snapshot()]).family_payload()
     house = payload["properties"][0]
-    assert set(house) == {"id", "label", "unit", "fetched_at", "from", "to", "stays"}
+    assert set(house) == {"id", "label", "unit", "fetched_at", "from", "to", "check_in", "check_out", "stays"}
+    assert (house["check_in"], house["check_out"]) == ("15:00", "11:00")
     assert house["stays"] == [
         ["2026-08-01", "2026-08-07", "b"],
         ["2026-08-07", "2026-08-10", "b", "Airbnb", 4],  # channel and guests, never amounts
@@ -202,6 +203,19 @@ def test_restoring_without_the_owner_tier_keeps_the_calendar():
     restored = properties_from_payloads(published.family_payload(), None)["santa"]
     assert restored.stays == original.stays
     assert restored.kpis == [] and restored.reservations == [] and restored.kpi_columns == ()
+
+
+def test_house_hours_travel_with_the_calendar():
+    late = snapshot(check_in_time="16:30", check_out_time="10:00")
+    published = Snapshot(generated_at=NOW, properties=[late])
+    house = published.family_payload()["properties"][0]
+    assert (house["check_in"], house["check_out"]) == ("16:30", "10:00")
+    restored = properties_from_payloads(published.family_payload(), published.owner_payload())["santa"]
+    assert (restored.check_in_time, restored.check_out_time) == ("16:30", "10:00")
+    # A page published before the hours existed falls back to the usual ones.
+    del house["check_in"], house["check_out"]
+    older = properties_from_payloads({**published.family_payload(), "properties": [house]}, None)["santa"]
+    assert (older.check_in_time, older.check_out_time) == ("15:00", "11:00")
 
 
 def test_pages_written_by_an_older_layout_are_not_restored():
