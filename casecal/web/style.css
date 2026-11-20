@@ -287,7 +287,7 @@ button, input { font: inherit; color: inherit; }
 .tip-title { font-weight: 650; margin-bottom: 6px; }
 .tip-title::first-letter { text-transform: uppercase; }
 .tip-row { display: grid; grid-template-columns: 14px 1fr; column-gap: 8px; align-items: center; padding: 3px 0; }
-.tip-row .key { width: 14px; height: 3px; border-radius: 2px; background: var(--hue); }
+.tip-row .dash { width: 14px; height: 3px; border-radius: 2px; background: var(--hue); }
 .tip-row strong { font-weight: 650; }
 .tip-row .who { color: var(--text-secondary); }
 .tip-row .detail { grid-column: 2; color: var(--text-secondary); font-size: 12px; }
@@ -385,7 +385,6 @@ button, input { font: inherit; color: inherit; }
 .kpi-tables h3 .swatch { width: 12px; height: 12px; border-radius: 4px; }
 .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .kpi td, .kpi th { padding-right: 12px; white-space: nowrap; }
-.kpi.months td:first-child::first-letter { text-transform: uppercase; }
 .kpi-tables h4 { margin-top: 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
 .kpi-tables .hint { margin-top: 6px; font-size: 12px; }
 /* The month stays in view while the amounts scroll sideways on a phone. */

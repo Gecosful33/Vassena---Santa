@@ -99,6 +99,8 @@
   function dayLabel(day) { return (sameYear(day) ? F.day : F.dayYear).format(dateOf(day)); }
   function shortLabel(day) { return (sameYear(day) ? F.short : F.shortYear).format(dateOf(day)); }
   function nights(n) { return n === 1 ? "1 notte" : F.int.format(n) + " notti"; }
+  /** "gennaio" -> "Gennaio": Italian writes month names small, a table's first column does not. */
+  function capital(text) { return text.charAt(0).toLocaleUpperCase(IT) + text.slice(1); }
   function euro(cents) { return cents === null || cents === undefined ? "–" : F.money.format(cents / 100); }
   function pct(ratio) { return ratio === null || ratio === undefined ? "–" : F.pct.format(ratio); }
 
@@ -994,7 +996,7 @@
     return [el("div", { class: "tip-title", text: F.long.format(dateOf(day)) })].concat(props.map(function (prop) {
       var words = describe(prop, day), family = familyWords(prop, day);
       return el("div", { class: "tip-row p" + prop.index },
-        el("i", { class: "key" }),
+        el("i", { class: "dash" }),
         el("span", null, el("strong", { text: words.status }), el("span", { class: "who", text: " · " + prop.label })),
         words.detail ? el("span", { class: "detail", text: words.detail }) : null,
         family ? el("span", { class: "detail fam", text: family }) : null);
@@ -1298,7 +1300,7 @@
       var month = Number(node.getAttribute("data-month"));
       return [el("div", { class: "tip-title", text: F.month.format(dateOf(L.dayOf(year, month, 1))) })].concat(
         series.map(function (s) {
-          return el("div", { class: "tip-row p" + s.prop.index }, el("i", { class: "key" }),
+          return el("div", { class: "tip-row p" + s.prop.index }, el("i", { class: "dash" }),
             el("span", null, el("span", { class: "val", text: euro(s.rows[month - 1].net_cents) }),
               el("span", { class: "who", text: " · " + s.prop.label })));
         }));
@@ -1322,8 +1324,8 @@
     }));
   }
   /** A wide table scrolls sideways inside its own box; its first column stays in view. */
-  function wideTable(columns, body, footer, extraClass) {
-    var table = el("table", { class: "rows kpi" + (extraClass ? " " + extraClass : "") },
+  function wideTable(columns, body, footer) {
+    var table = el("table", { class: "rows kpi" },
       el("thead", null, headerRow(columns)),
       el("tbody", null, body),
       footer ? el("tfoot", null, footer) : null);
@@ -1358,11 +1360,10 @@
       el("h4", { text: "Statistiche mensili" }),
       wideTable(columns,
         entry.rows.map(function (row) {
-          return bodyRow(columns, line(F.monthName.format(dateOf(L.dayOf(year, row.m, 1))), row.nights,
+          return bodyRow(columns, line(capital(F.monthName.format(dateOf(L.dayOf(year, row.m, 1)))), row.nights,
             row.occupancy, row.vals, row.gross_cents, row.net_cents), row.nights ? null : "zero");
         }),
-        bodyRow(columns, line("Totale " + year, total.nights, total.occupancy, total.vals, total.gross_cents, total.net_cents)),
-        "months"),
+        bodyRow(columns, line("Totale " + year, total.nights, total.occupancy, total.vals, total.gross_cents, total.net_cents))),
       withGross ? el("p", { class: "hint", text: "* calcolato: lordo = notti × ADR" }) : null
     ];
   }

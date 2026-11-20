@@ -202,6 +202,44 @@ async function main() {
     assert.deepEqual(report.clipped, [], "labels that do not fit must not be drawn");
   }
 
+  /**
+   * Every table is laid out as a table: header, rows and totals one under the other,
+   * each cell under its heading. (A class name shared with the calendar once turned
+   * the monthly statistics into a grid, with the three parts side by side.)
+   */
+  async function tablesKeepTheirShape(page, atLeast) {
+    const report = await page.evaluate(() => {
+      const expected = { THEAD: "table-header-group", TBODY: "table-row-group", TFOOT: "table-footer-group" };
+      const display = (node) => getComputedStyle(node).display;
+      const tables = [...document.querySelectorAll("table")];
+      const problems = [];
+      for (const table of tables) {
+        const say = (what) => problems.push(`${table.className}: ${what}`);
+        if (display(table) !== "table") say("laid out as " + display(table));
+        const groups = [...table.children], boxes = groups.map((group) => group.getBoundingClientRect());
+        groups.forEach((group, i) => {
+          if (display(group) !== expected[group.tagName]) say(group.tagName + " laid out as " + display(group));
+          if (i && boxes[i].top < boxes[i - 1].bottom - 0.5) say(group.tagName + " is not below " + groups[i - 1].tagName);
+          if (i && Math.abs(boxes[i].left - boxes[0].left) > 0.5) say(group.tagName + " does not start where the header does");
+        });
+        const headings = [...table.querySelectorAll("thead th")];
+        for (const row of table.querySelectorAll("tbody tr, tfoot tr")) {
+          const cells = [...row.children];
+          if (cells.length !== headings.length) continue; // a row that spans columns
+          cells.forEach((cell, i) => {
+            const own = cell.getBoundingClientRect(), above = headings[i].getBoundingClientRect();
+            if (Math.abs(own.left - above.left) > 0.5 || Math.abs(own.right - above.right) > 0.5) {
+              say(`"${cell.textContent}" is not under "${headings[i].textContent}"`);
+            }
+          });
+        }
+      }
+      return { count: tables.length, problems: problems.slice(0, 8) };
+    });
+    assert.ok(report.count >= atLeast, `expected at least ${atLeast} tables, found ${report.count}`);
+    assert.deepEqual(report.problems, [], "a table lost its shape");
+  }
+
   async function noSidewaysScroll(page) {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px`);
@@ -290,6 +328,7 @@ async function main() {
   assert.equal(await page.locator(".tiles").count(), 0);
   assert.ok(!(await page.textContent("#app")).includes("Netto proprietario"), "no economics rendered for the family");
   await noSidewaysScroll(page);
+  await tablesKeepTheirShape(page, 2); // the stays of each house
 
   // The family's own periods: listed, drawn over the calendar, each with its standing on the portal.
   const demoNames = await names(page);
@@ -307,6 +346,13 @@ async function main() {
   await page.hover(".day.today");
   await page.waitForSelector(".tip:not([hidden])");
   assert.equal(await page.locator(".tip .tip-row").count(), 2, "one readout row per house");
+  const marks = await page.locator(".tip .tip-row .dash").evaluateAll((nodes) => nodes.map((node) => {
+    const box = node.getBoundingClientRect();
+    return [Math.round(box.width), Math.round(box.height), getComputedStyle(node).backgroundColor];
+  }));
+  assert.equal(marks.length, 2);
+  for (const [width, height] of marks) assert.deepEqual([width, height], [14, 3], "each row carries its house's mark");
+  assert.notEqual(marks[0][2], marks[1][2], "in that house's colour");
   assert.match(await page.textContent(".tip"), /Ospiti · Casa Maredalle 15:00 di .+ alle 11:00 di /);
   assert.match(await page.textContent(".tip"), /Libera · Casa Lagodalle 11:00 \(check-out al mattino\)/);
   await shot(page, "03-tooltip", false);
@@ -365,6 +411,10 @@ async function main() {
   assert.equal(await page.locator(".kpi-tables h4", { hasText: "Prenotazioni con check-in" }).count(), 2);
   const headers = await page.locator(".kpi-tables table").first().locator("thead th").allTextContents();
   assert.deepEqual(headers, ["Mese", "Notti", "Occ.", "ADR", "Lordo*", "Imposta", "Netto proprietario", "Netto/lordo*"]);
+  const monthNames = await page.locator(".kpi-tables table").first().locator("tbody td:first-child").allTextContents();
+  assert.deepEqual([monthNames.length, monthNames[0], monthNames[11]], [12, "Gennaio", "Dicembre"]);
+  assert.match(await page.locator(".kpi-tables table").first().locator("tfoot").innerText(), /^Totale \d{4}\s/);
+  await tablesKeepTheirShape(page, 6); // stays, monthly statistics and reservations of each house
   assert.ok((await page.locator(".col").count()) > 0, "monthly chart drawn");
   // The owner's to-do: the family periods whose nights are still for sale, and only those.
   const todo = await page.locator(".todo").innerText();
@@ -391,6 +441,7 @@ async function main() {
   await page.waitForSelector(".tiles");
   assert.equal(await page.locator(".house").count(), 2);
   await noSidewaysScroll(page);
+  await tablesKeepTheirShape(page, 6);
   await barsFollowTheHouseHours(page);
   await shot(page, "07-owner-phone-dark");
   // Bars are narrower in landscape or after a resize: labels must be fitted again.
