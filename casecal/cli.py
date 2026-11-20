@@ -8,13 +8,28 @@ import sys
 from datetime import datetime, timezone
 from typing import Sequence
 
-from .config import DEFAULT_CONFIG, ConfigError, credentials_for, load_config, missing_secrets
+from .config import (
+    DEFAULT_CONFIG,
+    ConfigError,
+    credentials_for,
+    family_groups,
+    load_config,
+    missing_secrets,
+)
 from .crypto import PassphraseError, check_passphrases, generate_passphrase
 from .errors import SyncAborted
 from .familylog import token_problem
-from .sync import PreviousPage, collect, family_state, previous_from_site, publish
+from .sync import PreviousPage, alert_owner, collect, family_state, previous_from_site, publish
 
 EXIT_OK, EXIT_ABORTED, EXIT_CONFIG = 0, 1, 2
+# What was done with the owner's alert, for a log that is public: no counts, no dates.
+ALERT_WORDS = {
+    "nothing": "nessuna novità",
+    "open": "segnalazione aperta",
+    "new": "nuovi periodi segnalati",
+    "remind": "promemoria inviato",
+    "close": "segnalazione chiusa",
+}
 
 
 def _in_actions() -> bool:
@@ -97,10 +112,29 @@ def cmd_sync(args: argparse.Namespace) -> int:
         api=os.environ.get("GITHUB_API_URL", "").strip() or "https://api.github.com",
     )
     snapshot.entries, snapshot.log = family_layer.entries, family_layer.log
-    if family_layer.warnings:
-        report.warnings["registro"] = family_layer.warnings
+    snapshot.groups, group_problems = family_groups(os.environ)
+    if family_layer.warnings or group_problems:
+        report.warnings["registro"] = family_layer.warnings + group_problems
     if family_layer.log:
         _say("registro di famiglia: letto")
+    # The owner's alert: written by the workflow's own token (ALERTS_TOKEN), so that
+    # GitHub notifies the owner; a token of the owner's would write as the owner.
+    alert, alert_problem = alert_owner(
+        config,
+        snapshot,
+        report,
+        family_layer,
+        token=os.environ.get("ALERTS_TOKEN", "").strip() or None,
+        repository=os.environ.get("GITHUB_REPOSITORY", "").strip() or None,
+        owner=os.environ.get("GITHUB_REPOSITORY_OWNER", "").strip() or None,
+        load_previous=load_previous,
+        now=now,
+        api=os.environ.get("GITHUB_API_URL", "").strip() or "https://api.github.com",
+    )
+    if alert_problem:
+        report.warnings["avvisi"] = [alert_problem]
+    if alert:
+        _say(f"avviso al proprietario: {ALERT_WORDS[alert]}")
     for prop_id in report.fresh:
         _say(f"{prop_id}: letto")
     for prop_id, notes in report.warnings.items():

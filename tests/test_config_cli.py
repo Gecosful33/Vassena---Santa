@@ -5,7 +5,14 @@ from pathlib import Path
 import pytest
 
 from casecal import cli, sync
-from casecal.config import OPTIONAL_SECRETS, ConfigError, credentials_for, load_config, missing_secrets
+from casecal.config import (
+    OPTIONAL_SECRETS,
+    ConfigError,
+    credentials_for,
+    family_groups,
+    load_config,
+    missing_secrets,
+)
 from casecal.crypto import derive_key, open_envelope, site_salt
 from casecal.demo import DEMO_FAMILY_PASSPHRASE, DEMO_OWNER_PASSPHRASE, demo_snapshot
 from casecal.family import encode_event
@@ -38,6 +45,8 @@ def test_the_repository_configuration_is_valid():
     config = load_config(ROOT / "properties.toml")
     assert [p.id for p in config.properties] == ["santa", "vassena"]
     assert [(p.check_in, p.check_out) for p in config.properties] == [("15:00", "11:00")] * 2
+    # Only the second house has its owners' stays entered as bookings that bill nothing.
+    assert [p.unpaid_is_own_use for p in config.properties] == [False, True]
     assert config.timezone == "Europe/Rome"
     assert config.properties[0].secret_names() == ("SANTA_KB_URL", "SANTA_KB_USER", "SANTA_KB_PASS")
 
@@ -104,6 +113,30 @@ def test_missing_file_is_a_configuration_error(tmp_path):
         load_config(tmp_path / "nope.toml")
 
 
+def test_the_own_use_rule_is_a_yes_or_no_per_house(tmp_path):
+    config = load_config(write_config(tmp_path, HOUSE + "unpaid_is_own_use = true\n"))
+    assert config.properties[0].unpaid_is_own_use is True
+    assert load_config(write_config(tmp_path, HOUSE)).properties[0].unpaid_is_own_use is False
+    with pytest.raises(ConfigError, match="a: unpaid_is_own_use deve essere true o false"):
+        load_config(write_config(tmp_path, HOUSE + 'unpaid_is_own_use = "sì"\n'))
+
+
+def test_the_family_groups_are_read_from_their_secret():
+    assert family_groups({}) == ([], [])
+    assert family_groups({"FAMILY_GROUPS": "  "}) == ([], [])
+    assert family_groups({"FAMILY_GROUPS": "Famiglia Rossi; Famiglia  Bianchi ;"}) == (["Famiglia Rossi", "Famiglia Bianchi"], [])
+    assert family_groups({"FAMILY_GROUPS": "Famiglia Rossi\nFamiglia Bianchi\n"})[0] == ["Famiglia Rossi", "Famiglia Bianchi"]
+
+
+def test_a_slip_in_the_family_groups_is_trimmed_and_reported_without_names():
+    names, problems = family_groups({"FAMILY_GROUPS": "Rossi; rossi; " + "x" * 41 + "; Bian\tchi"})
+    assert names == ["Rossi", "Bian chi"]
+    assert len(problems) == 2 and all("FAMILY_GROUPS" in problem for problem in problems)
+    assert not any("Rossi" in problem or "xxx" in problem for problem in problems)
+    many, problems = family_groups({"FAMILY_GROUPS": ";".join(f"Famiglia {n}" for n in range(12))})
+    assert len(many) == 8 and len(problems) == 1 and "più di 8" in problems[0]
+
+
 def test_the_nightly_workflow_passes_every_secret_the_program_needs():
     workflow = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
     wired = set(re.findall(r"^\s+([A-Z0-9_]+): \$\{\{ secrets\.\1 \}\}$", workflow, re.MULTILINE))
@@ -133,7 +166,8 @@ def test_credentials_are_read_from_the_environment():
 
 
 def run_cli(monkeypatch, capsys, argv, env=None):
-    ambient = ["GITHUB_ACTIONS", "GITHUB_OUTPUT", "GITHUB_REPOSITORY", "GITHUB_API_URL", "SITE_URL"]
+    ambient = ["GITHUB_ACTIONS", "GITHUB_OUTPUT", "GITHUB_REPOSITORY", "GITHUB_REPOSITORY_OWNER",
+               "GITHUB_API_URL", "SITE_URL", "ALERTS_TOKEN"]
     for name in list(GOOD_ENV) + list(OPTIONAL_SECRETS) + ambient:
         monkeypatch.delenv(name, raising=False)
     for name, value in (env or {}).items():
@@ -251,6 +285,42 @@ def test_sync_never_publishes_a_token_of_the_wrong_kind(monkeypatch, capsys, tmp
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, FAMILY_LOG_TOKEN="ghp_classic0123456789")
     assert family["log"] is None
     assert "fine-grained" in printed and "degraded=true" in outputs
+
+
+def test_sync_publishes_the_families_the_form_offers(monkeypatch, capsys, tmp_path):
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, FAMILY_GROUPS="Famiglia Rossi; Famiglia Bianchi")
+    assert family["groups"] == ["Famiglia Rossi", "Famiglia Bianchi"]
+    assert "degraded=false" in outputs and "Rossi" not in printed
+    # A slip in that secret does not stop the calendar: it is trimmed, and the run asks for attention.
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, FAMILY_GROUPS="Famiglia Rossi; famiglia rossi")
+    assert family["groups"] == ["Famiglia Rossi"]
+    assert "FAMILY_GROUPS: un nome è ripetuto" in printed and "degraded=true" in outputs
+
+
+def test_sync_hands_the_owners_alert_what_it_needs(monkeypatch, capsys, tmp_path):
+    seen = {}
+
+    def fake_alert(config, snapshot, report, family, **settings):
+        seen.update(settings, fresh=family.fresh, entries=len(family.entries))
+        return "open", None
+
+    monkeypatch.setattr(cli, "alert_owner", fake_alert)
+    key = derive_key(GOOD_ENV["FAMILY_PASSPHRASE"], site_salt("owner/repo"))
+    github = FakeGitHub(issues=[{"number": 7, "title": ISSUE_TITLE}],
+                        comments={7: [encode_event(key, {"t": "set", **ENTRY})]})
+    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, github, FAMILY_LOG_TOKEN=TOKEN,
+                                   ALERTS_TOKEN="ghs_token-del-workflow", GITHUB_REPOSITORY_OWNER="owner")
+    assert (seen["token"], seen["repository"], seen["owner"]) == ("ghs_token-del-workflow", "owner/repo", "owner")
+    assert seen["fresh"] is True and seen["entries"] == 1
+    assert "avviso al proprietario: segnalazione aperta" in printed and "ghs_token-del-workflow" not in printed
+    assert "degraded=false" in outputs
+
+
+def test_sync_reports_an_alert_that_could_not_be_written(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(cli, "alert_owner", lambda *args, **settings: (None, "avviso al proprietario non aggiornato (HTTP 500)"))
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None)
+    assert len(family["properties"]) == 2  # the page is published all the same
+    assert "avvisi: avviso al proprietario non aggiornato" in printed and "degraded=true" in outputs
 
 
 def test_sync_carries_the_entries_over_a_change_of_passphrase(monkeypatch, capsys, tmp_path):

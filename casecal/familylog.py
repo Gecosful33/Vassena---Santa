@@ -116,7 +116,9 @@ def since_for(comment: LogComment | None) -> str | None:
     return (created - SINCE_MARGIN).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class GitHubLog:
+class GitHubIssues:
+    """The issues of one repository, as far as this program needs them."""
+
     def __init__(
         self,
         token: str,
@@ -126,7 +128,7 @@ class GitHubLog:
         session: requests.Session | None = None,
     ) -> None:
         if not _REPO_RE.match(repo or ""):
-            raise FamilyLogError("repository del registro non valido")
+            raise FamilyLogError("repository non valido")
         self.repo = repo
         self.api = api.rstrip("/")
         self.notes: list[str] = []  # problems that did not stop the read (safe to log)
@@ -179,6 +181,39 @@ class GitHubLog:
         # Never a silent cut: the newest events are the ones that would go missing.
         raise FamilyLogError(f"{what}: troppi elementi (oltre {MAX_PAGES * PAGE_SIZE})")
 
+    def issue_titled(self, title: str, *, state: str, what: str) -> dict[str, Any] | None:
+        """The oldest issue (not pull request) with exactly this title, or ``None``."""
+        issues = self._pages("/issues", what, {"state": state, "sort": "created", "direction": "asc"})
+        try:
+            for issue in issues:
+                if issue.get("title") == title and not _is_pull_request(issue):
+                    int(issue["number"])
+                    return issue
+        except (AttributeError, KeyError, TypeError, ValueError):
+            raise FamilyLogError(f"{what}: risposta inattesa") from None
+        return None
+
+    def create_issue(self, title: str, body: str, *, what: str, assignees: list[str] | None = None) -> int:
+        payload: dict[str, Any] = {"title": title, "body": body}
+        if assignees:
+            payload["assignees"] = assignees
+        created = self._json("POST", "/issues", what, json=payload)
+        try:
+            return int(created["number"])
+        except (KeyError, TypeError, ValueError):
+            raise FamilyLogError(f"{what}: risposta inattesa") from None
+
+
+    def comment(self, number: int, body: str, *, what: str) -> None:
+        self._json("POST", f"/issues/{number}/comments", what, json={"body": body})
+
+    def close_issue(self, number: int, *, what: str) -> None:
+        self._json("PATCH", f"/issues/{number}", what, json={"state": "closed", "state_reason": "completed"})
+
+
+class GitHubLog(GitHubIssues):
+    """The family's log: one locked issue whose comments are the encrypted events."""
+
     def find_or_create_issue(self) -> int:
         """Number of the log issue; the oldest one with our title, created if there is none.
 
@@ -186,20 +221,13 @@ class GitHubLog:
         add comments to it. They could not forge an entry, but they could bury
         the real ones.
         """
-        what = "ricerca del registro"
-        issues = self._pages("/issues", what, {"state": "all", "sort": "created", "direction": "asc"})
-        try:
-            for issue in issues:
-                if issue.get("title") == ISSUE_TITLE and not _is_pull_request(issue):
-                    number = int(issue["number"])
-                    if issue.get("locked") is False:  # created but never locked, or unlocked by hand
-                        self._lock(number)
-                    return number
-            what = "creazione del registro"
-            created = self._json("POST", "/issues", what, json={"title": ISSUE_TITLE, "body": ISSUE_BODY})
-            number = int(created["number"])
-        except (AttributeError, KeyError, TypeError, ValueError):
-            raise FamilyLogError(f"{what}: risposta inattesa") from None
+        issue = self.issue_titled(ISSUE_TITLE, state="all", what="ricerca del registro")
+        if issue is not None:
+            number = int(issue["number"])
+            if issue.get("locked") is False:  # created but never locked, or unlocked by hand
+                self._lock(number)
+            return number
+        number = self.create_issue(ISSUE_TITLE, ISSUE_BODY, what="creazione del registro")
         self._lock(number)
         return number
 
@@ -229,6 +257,7 @@ class FamilyState:
     entries: list[FamilyEntry]
     log: dict[str, Any] | None  # how the page reaches the log; None = editing is off
     warnings: list[str]
+    fresh: bool = False  # the log itself was read in this run (not carried over from the page online)
 
 
 def read_family_state(
@@ -300,4 +329,5 @@ def read_family_state(
             "since": since_for(last),
         },
         warnings=warnings,
+        fresh=True,
     )

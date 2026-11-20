@@ -1,0 +1,111 @@
+{
+  "about": "Where a family period stands against the manager's calendar. The nightly job (casecal/family.py, entry_status) and the page (casecal/web/logic.js, entryStatus) must give the same answer: tests/test_alerts.py and tests/js/logic.test.js both run these cases.",
+  "house": {
+    "from": "2026-01-01",
+    "to": "2027-01-01",
+    "stays": [
+      [
+        "2026-08-01",
+        "2026-08-05",
+        "b"
+      ],
+      [
+        "2026-08-05",
+        "2026-08-12",
+        "c"
+      ],
+      [
+        "2026-08-20",
+        "2026-08-25",
+        "b",
+        "Airbnb",
+        4
+      ],
+      [
+        "2026-12-20",
+        "2027-01-01",
+        "c"
+      ]
+    ]
+  },
+  "cases": [
+    {
+      "start": "2026-08-05",
+      "end": "2026-08-12",
+      "state": "blocked",
+      "why": "exactly the blocked dates"
+    },
+    {
+      "start": "2026-08-06",
+      "end": "2026-08-08",
+      "state": "blocked",
+      "why": "inside them"
+    },
+    {
+      "start": "2026-08-10",
+      "end": "2026-08-14",
+      "state": "pending",
+      "why": "two nights past the block are for sale"
+    },
+    {
+      "start": "2026-08-12",
+      "end": "2026-08-20",
+      "state": "pending",
+      "why": "between two stays, all for sale"
+    },
+    {
+      "start": "2026-08-25",
+      "end": "2026-08-27",
+      "state": "pending",
+      "why": "arriving the day guests leave is no conflict"
+    },
+    {
+      "start": "2026-08-17",
+      "end": "2026-08-20",
+      "state": "pending",
+      "why": "nor is leaving the day they arrive"
+    },
+    {
+      "start": "2026-08-04",
+      "end": "2026-08-06",
+      "state": "conflict",
+      "why": "the first night has guests"
+    },
+    {
+      "start": "2026-08-18",
+      "end": "2026-08-21",
+      "state": "conflict",
+      "why": "the last night has guests"
+    },
+    {
+      "start": "2026-08-11",
+      "end": "2026-08-22",
+      "state": "conflict",
+      "why": "guests outrank nights for sale"
+    },
+    {
+      "start": "2026-12-28",
+      "end": "2027-01-03",
+      "state": "unknown",
+      "why": "blocked as far as the data goes, nothing known after"
+    },
+    {
+      "start": "2027-02-01",
+      "end": "2027-02-03",
+      "state": "unknown",
+      "why": "wholly beyond the data"
+    },
+    {
+      "start": "2026-12-18",
+      "end": "2027-01-02",
+      "state": "pending",
+      "why": "a night known to be for sale outranks the unknown ones"
+    },
+    {
+      "start": "2025-12-30",
+      "end": "2026-01-02",
+      "state": "pending",
+      "why": "the same, with the unknown nights before the data"
+    }
+  ]
+}

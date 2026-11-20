@@ -28,6 +28,7 @@ from .parse import (
     format_date,
     is_logged_in,
     is_login_page,
+    own_use_as_closed,
     parse_login_form,
     parse_reservations,
     parse_units,
@@ -184,6 +185,11 @@ def read_property(
         )
         if unmatched:
             warnings.append(f"{unmatched} prenotazioni non coincidono con il calendario")
+        if prop.unpaid_is_own_use:
+            # After the checks above: the portal's own statistics count these nights as sold.
+            stays = own_use_as_closed(
+                stays, reservations.rows, covered_from=covered_from, covered_to=covered_to
+            )
     except PortalError as exc:
         warnings.append(f"dettagli delle prenotazioni non letti ({type(exc).__name__}: {exc})")
 

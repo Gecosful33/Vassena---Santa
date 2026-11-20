@@ -7,9 +7,9 @@ import requests
 from casecal import portal
 from casecal.config import PortalCredentials, PropertyConfig
 from casecal.errors import LayoutError, LoginError, PortalError, TransportError
-from casecal.model import BOOKING, CLOSED, Stay
+from casecal.model import BOOKING, CLOSED, Reservation, Stay
 from casecal.portal import PortalClient, choose_unit, fetch_property, portal_base, read_property
-from casecal.parse import Unit
+from casecal.parse import Unit, own_use_as_closed
 from portal_html import eur, grid_classes, landing_page, login_page, reservations_page, stats_page
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
@@ -248,6 +248,63 @@ def test_losing_the_reservation_details_does_not_lose_the_calendar():
     assert all(s.channel is None for s in snapshot.stays)
     assert snapshot.reservations == [] and snapshot.reservation_columns == ()
     assert snapshot.warnings == ["dettagli delle prenotazioni non letti (TransportError: elenco prenotazioni: HTTP 503)"]
+
+
+OWN_USE = PropertyConfig(id="santa", label="Santa", env="SANTA", unpaid_is_own_use=True)
+
+
+def unpaid_second_booking(params):
+    """The second booking bills nothing: every amount the portal lists for it is zero."""
+    return reservations_page(date(2026, 1, 1), date(2027, 12, 31), HEADERS, [
+        ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("750"), eur("409.50"), ""],
+        ["Casa Demo", "Anna Verdi", "Diretta", "2", "31/12/2026", "03/01/2027", eur("0"), eur("0"), ""],
+    ])
+
+
+def test_bookings_that_bill_nothing_are_the_owners_own_stays_where_the_house_says_so():
+    session = FakeSession(routes({("GET", "/demo/reservations"): unpaid_second_booking}))
+    snapshot = read_property(logged_in(session), OWN_USE, None, [2026, 2027], NOW)
+    assert [(s.start, s.end, s.kind, s.channel, s.guests) for s in snapshot.stays] == [
+        (date(2026, 5, 30), date(2026, 6, 2), BOOKING, "Airbnb", 4),
+        (date(2026, 7, 1), date(2026, 8, 1), CLOSED, None, None),
+        (date(2026, 12, 31), date(2027, 1, 3), CLOSED, None, None),  # blocked dates, not guests
+    ]
+    assert snapshot.warnings == []
+    # The owner's figures stay the portal's: the row is still listed, and the nights still count as sold.
+    assert len(snapshot.reservations) == 2
+    assert [(t.year, t.room_nights) for t in snapshot.kpi_totals] == [(2026, 4), (2027, 2)]
+
+
+def test_without_that_rule_a_booking_that_bills_nothing_is_still_a_booking():
+    session = FakeSession(routes({("GET", "/demo/reservations"): unpaid_second_booking}))
+    snapshot = read_property(logged_in(session), PROP, None, [2026, 2027], NOW)
+    assert [s.kind for s in snapshot.stays] == [BOOKING, CLOSED, BOOKING]
+    assert snapshot.stays[2].channel == "Diretta"
+
+
+def test_only_explicit_zeros_make_a_booking_an_own_stay():
+    stays = [Stay(date(2026, 6, 1), date(2026, 6, 3)), Stay(date(2026, 6, 5), date(2026, 6, 8)),
+             Stay(date(2026, 6, 10), date(2026, 6, 12)), Stay(date(2026, 6, 20), date(2026, 6, 25), CLOSED)]
+    reservations = [
+        Reservation(date(2026, 6, 1), date(2026, 6, 3), "Diretta", None, (Decimal("0"), Decimal("0.00"), None)),
+        Reservation(date(2026, 6, 5), date(2026, 6, 8), "Diretta", None, (Decimal("0"), Decimal("120"))),  # something is billed
+        Reservation(date(2026, 6, 10), date(2026, 6, 12), "Diretta", None, (None, None)),                   # no amount listed at all
+    ]
+    marked = own_use_as_closed(stays, reservations, covered_from=date(2026, 1, 1), covered_to=date(2027, 1, 1))
+    assert [s.kind for s in marked] == [CLOSED, BOOKING, BOOKING, CLOSED]
+    assert marked[0] == Stay(date(2026, 6, 1), date(2026, 6, 3), CLOSED)  # channel and guests are dropped with the booking
+    # A stay with no reservation row at all is left alone, and so is one that only partly matches.
+    lone = own_use_as_closed([Stay(date(2026, 7, 1), date(2026, 7, 4))], reservations,
+                             covered_from=date(2026, 1, 1), covered_to=date(2027, 1, 1))
+    assert lone[0].kind == BOOKING
+
+
+def test_an_own_stay_across_the_edge_of_the_data_is_matched_on_the_part_inside():
+    # The calendar ends on 1 January: the booking is known there as 30 Dec -> 1 Jan.
+    stays = [Stay(date(2026, 12, 30), date(2027, 1, 1))]
+    reservations = [Reservation(date(2026, 12, 30), date(2027, 1, 4), "Diretta", None, (Decimal("0"),))]
+    marked = own_use_as_closed(stays, reservations, covered_from=date(2026, 1, 1), covered_to=date(2027, 1, 1))
+    assert marked[0].kind == CLOSED
 
 
 def test_reservations_that_disagree_with_the_calendar_are_reported():

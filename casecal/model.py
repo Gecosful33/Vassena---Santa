@@ -399,6 +399,8 @@ class Snapshot:
     # page reaches the log where those entries are written. None = read-only page.
     entries: list[Any] = field(default_factory=list)
     log: dict[str, Any] | None = None
+    # The families the entry form offers as fixed choices (empty: free text).
+    groups: list[str] = field(default_factory=list)
 
     def family_payload(self) -> dict[str, Any]:
         return {
@@ -411,6 +413,7 @@ class Snapshot:
             "properties": [prop.family_dict() for prop in self.properties],
             "entries": [entry.to_dict() for entry in self.entries],
             "log": self.log,
+            "groups": list(self.groups),
         }
 
     def owner_payload(self) -> dict[str, Any]:

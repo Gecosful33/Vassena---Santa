@@ -202,7 +202,10 @@ def test_the_portal_link_is_for_the_owner_only():
 def test_the_family_layer_travels_in_the_family_payload():
     plain = Snapshot(generated_at=NOW, properties=[snapshot()])
     assert plain.family_payload()["entries"] == [] and plain.family_payload()["log"] is None
+    assert plain.family_payload()["groups"] == []
     assert set(plain.owner_payload()) == {"v", "properties"}  # nothing of it in the owner tier
+    named = Snapshot(generated_at=NOW, properties=[snapshot()], groups=["Famiglia Rossi", "Famiglia Bianchi"])
+    assert named.family_payload()["groups"] == ["Famiglia Rossi", "Famiglia Bianchi"]
 
 
 def test_published_payloads_restore_the_same_snapshot():

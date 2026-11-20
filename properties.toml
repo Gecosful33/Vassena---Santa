@@ -28,3 +28,6 @@ env = "SANTA"      # secret: SANTA_KB_URL, SANTA_KB_USER, SANTA_KB_PASS
 id = "vassena"
 label = "Vassena"
 env = "VASSENA"    # secret: VASSENA_KB_URL, VASSENA_KB_USER, VASSENA_KB_PASS
+# Le prenotazioni che il portale riporta con tutti gli importi a zero sono soggiorni
+# nostri inseriti dal gestore, non ospiti: nel calendario valgono come date bloccate.
+unpaid_is_own_use = true
