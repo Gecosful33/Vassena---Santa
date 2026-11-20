@@ -1,0 +1,29 @@
+name: Probe temporaneo
+
+# Una tantum: il portale è dietro Cloudflare, che può rifiutare gli indirizzi dei
+# datacenter. Verifica, senza credenziali e senza indicare alcun gestore, che i runner
+# di GitHub raggiungano l'host pubblico del portale. Da rimuovere letto l'esito.
+
+on:
+  push:
+    branches: ["claude/**"]
+    paths: [".github/workflows/probe.yml"]
+
+permissions: {}
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Host pubblico del portale
+        run: |
+          for path in "/" "/assets/js/eve.js" "/demo/login"; do
+            curl -sS -o /dev/null -D headers.txt --max-time 30 \
+              -A "Mozilla/5.0 (compatible; casecal/1.0; owner calendar sync)" \
+              -H "Accept-Language: it-IT,it;q=0.9" \
+              -w "$path -> HTTP %{http_code}, %{size_download} byte\n" \
+              "https://vr.krossbooking.com$path" || echo "$path -> errore di rete"
+            grep -i -E "^(server|cf-mitigated):" headers.txt || true
+            sleep 2
+          done
