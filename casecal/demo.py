@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from .family import FamilyEntry
 from .model import (
     BOOKING,
     CLOSED,
@@ -158,6 +159,31 @@ def _house(
     )
 
 
+def _free_run(stays: list[Stay], after: date, nights: int, limit: date) -> date | None:
+    """First day on or after ``after`` from which ``nights`` nights are neither booked nor blocked."""
+    day = after
+    while day + timedelta(days=nights) <= limit:
+        if all(s.end <= day or s.start >= day + timedelta(days=nights) for s in stays):
+            return day
+        day += _ONE_DAY
+    return None
+
+
+def _demo_entries(today: date, sea_stays: list[Stay], lake_stays: list[Stay], end: date) -> list[FamilyEntry]:
+    """Invented family notes: one on dates already blocked on the portal, one on dates still for sale."""
+    stamp = "2026-01-01T09:00:00Z"
+    entries = []
+    blocked = next((s for s in sea_stays if s.kind == CLOSED and s.start > today and s.nights >= 7), None)
+    if blocked:  # inside dates the portal already shows as blocked
+        entries.append(FamilyEntry("demo_blocked_1", "mare", blocked.start + _ONE_DAY, blocked.start + 6 * _ONE_DAY,
+                                   "Elvio e famiglia", "", "Elvio", stamp))
+    free = _free_run(lake_stays, today + 15 * _ONE_DAY, 4, end)
+    if free:  # on dates still open for sale: someone has to block them
+        entries.append(FamilyEntry("demo_pending_1", "lago", free, free + 4 * _ONE_DAY,
+                                   "Nonna Ada", "viene con le amiche", "Giulia", stamp))
+    return entries
+
+
 def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant: str = "ok") -> Snapshot:
     """Two invented houses around ``now``.
 
@@ -198,6 +224,9 @@ def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant:
     )
     if variant == "missing":
         lake = MissingProperty(id="lago", label="Casa Lago")
+    # In the "missing" variant the lake house keeps its family note: the diary does not
+    # depend on the portal, the note just cannot be checked against it.
+    entries = _demo_entries(today, sea_stays, lake_stays, end)
     return Snapshot(
         generated_at=now,
         properties=[sea, lake],
@@ -205,4 +234,7 @@ def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant:
         timezone=timezone_name,
         note=None,
         demo=True,
+        entries=entries,
+        # Edits made in the demo stay in the browser that made them.
+        log={"kind": "local"},
     )

@@ -109,6 +109,10 @@ class PortalClient:
         if is_login_page(landing) or not is_logged_in(landing):
             raise LoginError("credenziali rifiutate dal portale")
 
+    def url(self, path: str) -> str:
+        """Address of a page of this portal, for a person to open."""
+        return self._url(path)
+
     def page(self, path: str, what: str, params: Mapping[str, str] | None = None) -> str:
         html = self._request("GET", path, what, params=params).text
         if is_login_page(html):
@@ -200,6 +204,7 @@ def read_property(
         reservations=reservations.rows if reservations else [],
         check_in_time=prop.check_in,
         check_out_time=prop.check_out,
+        portal_url=client.url(f"/property/details/id/{unit.id}"),
         warnings=warnings,
     )
 

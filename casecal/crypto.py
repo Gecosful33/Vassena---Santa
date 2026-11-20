@@ -77,9 +77,9 @@ def derive_key(passphrase: str, salt: bytes, iterations: int = KDF_ITERATIONS) -
     return kdf.derive(normalize_passphrase(passphrase).encode("utf-8"))
 
 
-def encrypt_json(key: bytes, payload: Any, *, aad: str) -> dict[str, str]:
+def encrypt_json(key: bytes, payload: Any, *, aad: str, pad: int = PAD_BLOCK) -> dict[str, str]:
     plaintext = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    padded = plaintext + b" " * (-len(plaintext) % PAD_BLOCK)
+    padded = plaintext + b" " * (-len(plaintext) % pad)
     iv = os.urandom(IV_BYTES)
     ciphertext = AESGCM(key).encrypt(iv, padded, aad.encode("ascii"))
     return {"iv": _b64(iv), "ct": _b64(ciphertext)}

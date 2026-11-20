@@ -43,35 +43,29 @@ test("days outside the known data are unknown, never free", () => {
   assert.equal(L.nightStatus(p, day("2027-01-01")).state, "unknown");
 });
 
-test("a house that could not be read is unknown and has no free windows", () => {
+test("a house that could not be read is unknown and lists no guests", () => {
   const p = L.prepare({ id: "x", label: "X", missing: true });
   assert.equal(L.dayInfo(p, day("2026-08-01")).state, "unknown");
-  assert.deepEqual(L.freeWindows(p, day("2026-08-01")), []);
+  assert.deepEqual(L.upcomingGuests(p, day("2026-08-01")), []);
 });
 
-test("free windows run between stays and stay open at the end of the data", () => {
+test("the guests to come are the stays with guests that have not ended, soonest first", () => {
   const p = house([
-    ["2026-08-01", "2026-08-07", "b"],
-    ["2026-08-07", "2026-08-10", "b"], // same-day turnover
-    ["2026-08-20", "2026-08-25", "c"]
-  ], "2026-01-01", "2027-01-01");
-  const windows = L.freeWindows(p, day("2026-07-30"));
-  assert.deepEqual(windows.map((w) => [L.ymd(w.start), L.ymd(w.end), w.nights, w.open]), [
-    ["2026-07-30", "2026-08-01", 2, false],
-    ["2026-08-10", "2026-08-20", 10, false],
-    ["2026-08-25", "2027-01-01", 129, true]
+    ["2026-07-20", "2026-07-25", "b"],                 // gone
+    ["2026-08-01", "2026-08-07", "b", "Airbnb", 4],
+    ["2026-08-07", "2026-08-10", "b", "Diretta", 2],   // same-day turnover
+    ["2026-08-20", "2026-08-25", "c"],                 // blocked dates are not guests
+    ["2026-12-30", "2027-01-02", "b"]
   ]);
-});
-
-test("free windows starting inside a stay begin when it ends", () => {
-  const p = house([["2026-08-01", "2026-08-07", "b"]], "2026-01-01", "2026-09-01");
-  const windows = L.freeWindows(p, day("2026-08-03"));
-  assert.deepEqual(windows.map((w) => [L.ymd(w.start), L.ymd(w.end)]), [["2026-08-07", "2026-09-01"]]);
-});
-
-test("a fully booked remainder yields no free window", () => {
-  const p = house([["2026-12-20", "2027-01-01", "b"]], "2026-01-01", "2027-01-01");
-  assert.deepEqual(L.freeWindows(p, day("2026-12-24")), []);
+  const list = (ymdText) => L.upcomingGuests(p, day(ymdText)).map((g) => [L.ymd(g.stay.start), g.current, g.inDays]);
+  assert.deepEqual(list("2026-07-30"), [["2026-08-01", false, 2], ["2026-08-07", false, 8], ["2026-12-30", false, 153]]);
+  assert.deepEqual(list("2026-08-01"), [["2026-08-01", true, 0], ["2026-08-07", false, 6], ["2026-12-30", false, 151]]);
+  // On a turnover day the guests leaving that morning are no longer listed; those arriving are in the house tonight.
+  assert.deepEqual(list("2026-08-07"), [["2026-08-07", true, 0], ["2026-12-30", false, 145]]);
+  assert.deepEqual(list("2026-08-10"), [["2026-12-30", false, 142]]);
+  assert.deepEqual(list("2027-01-02"), []);
+  const first = L.upcomingGuests(p, day("2026-07-30"))[0].stay;
+  assert.deepEqual([first.channel, first.guests], ["Airbnb", 4]); // what the portal says about them comes along
 });
 
 test("night status follows back-to-back stays to the first free night", () => {
@@ -208,6 +202,233 @@ test("each house gets a short mark that no other house shares", () => {
   assert.deepEqual(L.badges(["Casa", "Casa"]), ["1", "2"]);             // nothing tells them apart: numbers
   assert.deepEqual(L.badges(["  lago "]), ["L"]);
   assert.deepEqual(L.badges([]), []);
+});
+
+/* ---- the family's own entries ---- */
+
+function entry(overrides = {}) {
+  return { id: "e_k3j9x2m1q8", prop: "casa", start: "2026-08-10", end: "2026-08-14", who: "Marco",
+    note: "", by: "Marco", at: "2026-06-01T10:00:00Z", ...overrides };
+}
+const setEvent = (overrides) => ({ t: "set", ...entry(overrides) });
+
+test("an entry is validated field by field", () => {
+  const ok = L.validEntry(entry({ who: "  Nonna\tAda ", at: "ieri" }));
+  assert.deepEqual([ok.who, ok.at, L.ymd(ok.start), L.ymd(ok.end)], ["Nonna Ada", "", "2026-08-10", "2026-08-14"]);
+  const bad = [
+    { id: "short" }, { id: "has spaces!" }, { id: 12345678 }, { prop: "Casa" }, { prop: "../x" },
+    { start: "10/08/2026" }, { start: "2026-02-30" }, { end: "2026-08-10" }, { end: "2026-08-01" },
+    { who: "" }, { who: "   " }, { who: "x".repeat(81) }, { who: ["Marco"] }, { note: "x".repeat(201) }, { by: "x".repeat(41) },
+    { end: "2027-08-12" },                               // longer than a year
+    { start: "1999-12-30", end: "2000-01-02" }, { start: "2099-12-30", end: "2100-01-02" } // outside the calendar's century
+  ];
+  for (const change of bad) assert.equal(L.validEntry(entry(change)), null, JSON.stringify(change));
+  for (const junk of [null, undefined, "x", 3, []]) assert.equal(L.validEntry(junk), null);
+});
+
+test("an entry goes back to its stored form unchanged", () => {
+  assert.deepEqual(L.entryRecord(L.validEntry(entry())), entry());
+});
+
+test("the log replays into the current entries", () => {
+  const state = L.foldEvents([
+    setEvent(),
+    setEvent({ id: "e_second0001", who: "Nonna" }),
+    setEvent({ end: "2026-08-16", by: "Giulia" }), // the first entry, edited later
+    { t: "del", id: "e_second0001" }
+  ], {});
+  assert.deepEqual(Object.keys(state), ["e_k3j9x2m1q8"]);
+  assert.deepEqual([L.ymd(state.e_k3j9x2m1q8.end), state.e_k3j9x2m1q8.by], ["2026-08-16", "Giulia"]);
+});
+
+test("replaying events the page already shows changes nothing", () => {
+  const events = [setEvent(), setEvent({ id: "e_second0001", who: "Nonna" }), setEvent({ who: "Marco e Giulia" })];
+  const once = L.foldEvents(events, {});
+  // A change is shown as soon as it is saved, then confirmed by reading the log again.
+  const optimistic = L.foldEvents([events[2]], L.foldEvents(events.slice(0, 2), {}));
+  assert.deepEqual(L.foldEvents(events, optimistic), once);
+  assert.deepEqual(L.foldEvents(events, once), once);
+});
+
+test("replay leaves its input alone and skips bad events", () => {
+  const known = L.foldEvents([setEvent()], {});
+  const later = L.foldEvents([
+    setEvent({ id: "e_broken0001", end: "2020-01-01" }), { t: "del" }, { t: "wipe" }, "nope", null,
+    { t: "snap", entries: "nope" }, { t: "snap", entries: [entry(), { id: "bad" }] }, // a half-valid snapshot is ignored whole
+    setEvent({ id: "e_second0001", who: "Nonna" })
+  ], known);
+  assert.deepEqual(Object.keys(later).sort(), ["e_k3j9x2m1q8", "e_second0001"]);
+  assert.deepEqual(Object.keys(known), ["e_k3j9x2m1q8"]);
+});
+
+test("a snapshot replaces everything before it", () => {
+  const state = L.foldEvents([
+    setEvent(), { t: "snap", entries: [entry({ id: "e_kept000001", who: "Elvio" })] }, setEvent({ id: "e_after00001", who: "Nonna" })
+  ], {});
+  assert.deepEqual(Object.keys(state).sort(), ["e_after00001", "e_kept000001"]);
+});
+
+test("entries are listed by date, optionally for one house", () => {
+  const state = L.foldEvents([
+    setEvent({ id: "e_later00001", start: "2026-09-01", end: "2026-09-03" }),
+    setEvent({ id: "e_other00001", prop: "lago", start: "2026-07-01", end: "2026-07-03" }),
+    setEvent({ id: "e_sooner0001", start: "2026-06-01", end: "2026-06-03" })
+  ], {});
+  assert.deepEqual(L.entriesOf(state).map((e) => e.id), ["e_sooner0001", "e_other00001", "e_later00001"]);
+  assert.deepEqual(L.entriesOf(state, "casa").map((e) => e.id), ["e_sooner0001", "e_later00001"]);
+});
+
+test("an entry inside dates blocked on the portal is protected", () => {
+  const p = house([["2026-08-01", "2026-08-31", "c"]]);
+  const status = L.entryStatus(L.validEntry(entry()), p);
+  assert.deepEqual([status.state, status.open, status.guests], ["blocked", [], null]);
+});
+
+test("an entry on dates still for sale is pending, with the nights left to close", () => {
+  const free = L.entryStatus(L.validEntry(entry()), house([]));
+  assert.equal(free.state, "pending");
+  assert.deepEqual(free.open.map((r) => [L.ymd(r.start), L.ymd(r.end)]), [["2026-08-10", "2026-08-14"]]);
+  // Partly blocked: only the nights still open are listed, as separate runs.
+  const partly = L.entryStatus(L.validEntry(entry({ start: "2026-08-08", end: "2026-08-16" })),
+    house([["2026-08-10", "2026-08-12", "c"]]));
+  assert.equal(partly.state, "pending");
+  assert.deepEqual(partly.open.map((r) => [L.ymd(r.start), L.ymd(r.end)]),
+    [["2026-08-08", "2026-08-10"], ["2026-08-12", "2026-08-16"]]);
+});
+
+test("an entry over a guests' booking is a conflict", () => {
+  const p = house([["2026-08-12", "2026-08-15", "b", "Airbnb", 4]]);
+  const status = L.entryStatus(L.validEntry(entry()), p);
+  assert.equal(status.state, "conflict");
+  assert.deepEqual([L.ymd(status.guests.start), L.ymd(status.guests.end)], ["2026-08-12", "2026-08-15"]);
+});
+
+test("arriving the day guests leave, or leaving the day they arrive, is no conflict", () => {
+  const p = house([["2026-08-05", "2026-08-10", "b"], ["2026-08-14", "2026-08-18", "b"]]);
+  assert.equal(L.entryStatus(L.validEntry(entry()), p).state, "pending"); // 10 -> 14 fits exactly between them
+});
+
+test("nights the portal says nothing about are listed with those still for sale", () => {
+  const p = house([], "2026-01-01", "2026-08-12");
+  const status = L.entryStatus(L.validEntry(entry()), p);
+  assert.equal(status.state, "pending"); // the 10th and the 11th are known to be for sale
+  assert.deepEqual(status.open.map((r) => [L.ymd(r.start), L.ymd(r.end)]), [["2026-08-10", "2026-08-14"]]);
+});
+
+test("an entry the portal publishes nothing about yet cannot be called blocked or for sale", () => {
+  const p = house([["2026-08-01", "2026-08-12", "c"]], "2026-01-01", "2026-08-12");
+  const beyond = L.entryStatus(L.validEntry(entry({ start: "2026-09-01", end: "2026-09-05" })), p);
+  assert.equal(beyond.state, "unknown");
+  assert.deepEqual(beyond.open.map((r) => [L.ymd(r.start), L.ymd(r.end)]), [["2026-09-01", "2026-09-05"]]);
+  // Blocked as far as the data goes, unknown after: still not "blocked".
+  const partly = L.entryStatus(L.validEntry(entry()), p);
+  assert.equal(partly.state, "unknown");
+  assert.deepEqual(partly.open.map((r) => [L.ymd(r.start), L.ymd(r.end)]), [["2026-08-12", "2026-08-14"]]);
+});
+
+test("nights with guests are not listed among those to close", () => {
+  const p = house([["2026-08-11", "2026-08-12", "b"]]);
+  const status = L.entryStatus(L.validEntry(entry()), p);
+  assert.equal(status.state, "conflict");
+  assert.deepEqual(status.open.map((r) => [L.ymd(r.start), L.ymd(r.end)]),
+    [["2026-08-10", "2026-08-11"], ["2026-08-12", "2026-08-14"]]);
+});
+
+test("an entry of a house that could not be read has no status", () => {
+  const missing = L.prepare({ id: "casa", label: "Casa", missing: true });
+  assert.equal(L.entryStatus(L.validEntry(entry()), missing).state, "unknown");
+  assert.equal(L.entryStatus(L.validEntry(entry()), null).state, "unknown");
+});
+
+test("saving is refused with a reason", () => {
+  const p = house([["2026-08-20", "2026-08-25", "b"]]);
+  const existing = L.foldEvents([setEvent()], {});
+  const candidate = (overrides) => {
+    const c = { id: "e_new0000001", prop: "casa", start: day("2026-09-01"), end: day("2026-09-05"), who: "Giulia", ...overrides };
+    return L.checkEntry(c, [p], existing);
+  };
+  assert.deepEqual(candidate({}), { ok: true });
+  assert.equal(candidate({ prop: "montagna" }).code, "house");
+  assert.equal(candidate({ who: "  " }).code, "who");
+  assert.equal(candidate({ end: day("2026-09-01") }).code, "dates");
+  assert.equal(candidate({ start: NaN }).code, "dates");
+  assert.equal(candidate({ start: day("1999-12-31"), end: day("2000-01-03") }).code, "dates");
+  assert.equal(candidate({ start: day("2099-12-30"), end: day("2100-01-02") }).code, "dates");
+  assert.equal(candidate({ start: 1e9, end: 1e9 + 2 }).code, "dates"); // a year no date field should produce
+  assert.equal(candidate({ start: day("2026-09-01"), end: day("2027-09-03") }).code, "long");
+  assert.deepEqual(candidate({ start: day("2026-09-01"), end: day("2026-09-01") + L.MAX_NIGHTS }), { ok: true });
+  const guests = candidate({ start: day("2026-08-22"), end: day("2026-08-27") });
+  assert.equal(guests.code, "guests");
+  assert.equal(L.ymd(guests.detail.start), "2026-08-20");
+  const overlap = candidate({ start: day("2026-08-12"), end: day("2026-08-18") });
+  assert.deepEqual([overlap.code, overlap.detail.id], ["overlap", "e_k3j9x2m1q8"]);
+  // Back to back with another family stay is fine, and so is editing an entry over itself.
+  assert.deepEqual(candidate({ start: day("2026-08-14"), end: day("2026-08-18") }), { ok: true });
+  assert.deepEqual(candidate({ id: "e_k3j9x2m1q8", start: day("2026-08-11"), end: day("2026-08-15") }), { ok: true });
+});
+
+test("whatever the form accepts, the log's readers accept too", () => {
+  const p = house([]);
+  const cases = [
+    { start: day("2026-09-01"), end: day("2026-09-01") + L.MAX_NIGHTS },
+    { start: day("2000-01-01"), end: day("2000-01-02") },
+    { start: day("2099-12-31"), end: day("2100-01-01") }
+  ];
+  for (const dates of cases) {
+    const c = { id: "e_new0000001", prop: "casa", who: "Giulia", ...dates };
+    assert.deepEqual(L.checkEntry(c, [p], {}), { ok: true });
+    assert.ok(L.validEntry({ ...entry(), id: c.id, start: L.ymd(c.start), end: L.ymd(c.end) }) !== null);
+  }
+});
+
+test("a new period is proposed where nothing is in the way", () => {
+  const p = house([
+    ["2026-08-01", "2026-08-05", "b"],              // guests
+    ["2026-08-05", "2026-08-12", "c"],              // a short block right after them
+    ["2026-08-20", "2026-08-21", "b"],
+    ["2026-10-01", "2026-12-01", "c"]               // a long block
+  ]);
+  const draft = (ymdText, entries = {}) => {
+    const d = L.draftPeriod(p, day(ymdText), entries);
+    return [d.prop, L.ymd(d.start), L.ymd(d.end)];
+  };
+  assert.deepEqual(draft("2026-08-14"), ["casa", "2026-08-14", "2026-08-16"]); // free: two nights
+  assert.deepEqual(draft("2026-08-19"), ["casa", "2026-08-19", "2026-08-20"]); // one, guests arrive the next day
+  assert.deepEqual(draft("2026-08-08"), ["casa", "2026-08-05", "2026-08-12"]); // a short block is proposed whole
+  assert.deepEqual(draft("2026-10-10"), ["casa", "2026-10-10", "2026-10-17"]); // a long one a week at a time
+  assert.deepEqual(draft("2026-11-28"), ["casa", "2026-11-28", "2026-12-01"]); // ...up to its end
+
+  // The family's own periods bound the proposal on both sides.
+  const taken = L.foldEvents([
+    setEvent({ id: "e_before0001", start: "2026-08-05", end: "2026-08-07" }),
+    setEvent({ id: "e_after00001", start: "2026-08-10", end: "2026-08-12" }),
+    setEvent({ id: "e_free000001", start: "2026-08-15", end: "2026-08-18" })
+  ], {});
+  assert.deepEqual(draft("2026-08-08", taken), ["casa", "2026-08-07", "2026-08-10"]);
+  assert.deepEqual(draft("2026-08-14", taken), ["casa", "2026-08-14", "2026-08-15"]);
+  for (const from of ["2026-08-08", "2026-08-14", "2026-08-13", "2026-08-18", "2026-08-19"]) {
+    const d = L.draftPeriod(p, day(from), taken);
+    assert.deepEqual(L.checkEntry({ id: null, prop: "casa", who: "x", start: d.start, end: d.end }, [p], taken), { ok: true }, from);
+  }
+});
+
+test("the first day worth proposing skips guests and the family's own periods", () => {
+  const p = house([["2026-08-01", "2026-08-05", "b"], ["2026-08-05", "2026-08-08", "c"]], "2026-01-01", "2026-08-20");
+  const first = (ymdText, entries = {}) => L.ymd(L.firstOpenDay(p, day(ymdText), entries));
+  assert.equal(first("2026-07-30"), "2026-07-30");          // already free
+  assert.equal(first("2026-08-02"), "2026-08-05");          // guests until the 5th; the block after them will do
+  const taken = L.foldEvents([setEvent({ start: "2026-08-05", end: "2026-08-09" })], {});
+  assert.equal(first("2026-08-02", taken), "2026-08-09");   // ...unless the family already has it
+  // Nothing free in the known data: the day asked for comes back.
+  const full = house([["2026-08-01", "2026-08-20", "b"]], "2026-01-01", "2026-08-20");
+  assert.equal(L.ymd(L.firstOpenDay(full, day("2026-08-02"), {})), "2026-08-02");
+  assert.equal(L.ymd(L.firstOpenDay(L.prepare({ id: "casa", label: "Casa", missing: true }), day("2026-08-02"), {})), "2026-08-02");
+});
+
+test("new entry ids are well formed", () => {
+  const id = L.entryId(Uint8Array.from({ length: 12 }, (_, i) => i * 21));
+  assert.equal(id.length, 14);
+  assert.ok(L.validEntry(entry({ id })) !== null);
 });
 
 test("freshness flags a missed nightly run and a house left behind", () => {

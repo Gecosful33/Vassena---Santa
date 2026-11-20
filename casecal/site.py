@@ -13,7 +13,7 @@ from typing import Any, Mapping
 import requests
 
 WEB_DIR = Path(__file__).parent / "web"
-SCRIPTS = ("crypto.js", "logic.js", "app.js")
+SCRIPTS = ("crypto.js", "logic.js", "store.js", "app.js")
 _ENVELOPE_RE = re.compile(
     r'<script type="application/json" id="casecal-data">(.*?)</script>', re.DOTALL
 )
@@ -45,8 +45,9 @@ def render_page(envelope: Mapping[str, Any], *, title: str) -> str:
     """Inline CSS, JS and the encrypted envelope into one HTML document.
 
     The Content-Security-Policy allows exactly this script and this stylesheet
-    (by hash) and no network access at all, so the page cannot load or send
-    anything even if a scraped label carried markup.
+    (by hash). The only host the page may talk to is the GitHub API, where the
+    family's own entries are kept as ciphertext; it can load nothing from
+    anywhere, even if a scraped label carried markup.
     """
     css = _read("style.css")
     script = "\n".join(_read(name) for name in SCRIPTS)
@@ -61,6 +62,7 @@ def render_page(envelope: Mapping[str, Any], *, title: str) -> str:
             "default-src 'none'",
             f"script-src '{_csp_hash(script)}'",
             f"style-src '{_csp_hash(css)}'",
+            "connect-src https://api.github.com",
             "img-src data:",
             "base-uri 'none'",
             "form-action 'none'",

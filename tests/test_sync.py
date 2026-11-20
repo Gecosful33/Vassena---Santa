@@ -9,7 +9,7 @@ from casecal.crypto import open_envelope
 from casecal.errors import LayoutError, LoginError, SyncAborted
 from casecal.model import MissingProperty, MonthKpi, PropertySnapshot, Reservation, Snapshot, Stay
 from casecal.site import extract_envelope
-from casecal.sync import collect, describe_error, previous_from_site, publish, target_years
+from casecal.sync import PreviousPage, collect, describe_error, previous_from_site, publish, target_years
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
 FAMILY = "nebbia-quercia-sentiero-42"
@@ -81,7 +81,7 @@ def test_one_failure_reuses_the_published_data_for_that_house_only():
         CONFIG,
         CREDENTIALS,
         fetch=fetcher({"vassena": LoginError("credenziali rifiutate")}),
-        load_previous=lambda: {"vassena": old, "santa": house("santa", yesterday)},
+        load_previous=lambda: PreviousPage(properties={"vassena": old, "santa": house("santa", yesterday)}),
         now=NOW,
     )
     assert report.fresh == ["santa"] and report.reused == ["vassena"] and report.missing == []
@@ -104,7 +104,7 @@ def test_reused_data_takes_the_house_hours_from_the_current_configuration():
         config,
         CREDENTIALS,
         fetch=fetcher({"vassena": LoginError("credenziali rifiutate")}),
-        load_previous=lambda: {"vassena": old},
+        load_previous=lambda: PreviousPage(properties={"vassena": old}),
         now=NOW,
     )
     reused = snapshot.properties[1]
@@ -116,7 +116,7 @@ def test_a_failure_without_earlier_data_is_published_as_missing():
         CONFIG,
         CREDENTIALS,
         fetch=fetcher({"santa": LayoutError("tabella non trovata")}),
-        load_previous=lambda: {},
+        load_previous=PreviousPage,
         now=NOW,
     )
     assert report.missing == ["santa"] and report.reused == []
@@ -203,7 +203,8 @@ def test_previous_data_is_recovered_from_the_published_page(tmp_path, monkeypatc
     envelope = _published_envelope(tmp_path, Snapshot(generated_at=NOW, properties=[original]))
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: envelope)
     restored = previous_from_site("https://example.github.io/repo", family_passphrase=FAMILY, owner_passphrase=OWNER)
-    assert restored == {"vassena": original}
+    assert restored.properties == {"vassena": original}
+    assert restored.entries == [] and restored.log is None
 
 
 def test_previous_data_is_ignored_when_it_cannot_be_trusted(tmp_path, monkeypatch):
@@ -214,15 +215,15 @@ def test_previous_data_is_ignored_when_it_cannot_be_trusted(tmp_path, monkeypatc
     args = dict(family_passphrase=FAMILY, owner_passphrase=OWNER)
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: None)
-    assert previous_from_site("https://x.example", **args) == {}  # nothing online yet
-    assert previous_from_site(None, **args) == {}  # no site address configured
+    assert previous_from_site("https://x.example", **args) == PreviousPage()  # nothing online yet
+    assert previous_from_site(None, **args) == PreviousPage()  # no site address configured
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: demo)
-    assert previous_from_site("https://x.example", **args) == {}  # invented data never feeds a real page
+    assert previous_from_site("https://x.example", **args) == PreviousPage()  # invented data never feeds a real page
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: real)
     wrong = dict(family_passphrase="x" * 20, owner_passphrase="y" * 20)
-    assert previous_from_site("https://x.example", **wrong) == {}  # passphrases were rotated
+    assert previous_from_site("https://x.example", **wrong) == PreviousPage()  # passphrases were rotated
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: {"v": 99})
-    assert previous_from_site("https://x.example", **args) == {}  # garbage
+    assert previous_from_site("https://x.example", **args) == PreviousPage()  # garbage

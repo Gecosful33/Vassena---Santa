@@ -11,7 +11,8 @@ from typing import Sequence
 from .config import DEFAULT_CONFIG, ConfigError, credentials_for, load_config, missing_secrets
 from .crypto import PassphraseError, check_passphrases, generate_passphrase
 from .errors import SyncAborted
-from .sync import collect, previous_from_site, publish
+from .familylog import token_problem
+from .sync import PreviousPage, collect, family_state, previous_from_site, publish
 
 EXIT_OK, EXIT_ABORTED, EXIT_CONFIG = 0, 1, 2
 
@@ -55,6 +56,13 @@ def _load_settings(config_path: str):
 def cmd_check(args: argparse.Namespace) -> int:
     config, credentials, _, _ = _load_settings(args.config)
     _say(f"configurazione valida: {len(config.properties)} case, {len(credentials) * 3 + 2} secret presenti")
+    token = os.environ.get("FAMILY_LOG_TOKEN", "").strip()
+    if not token:
+        _say("registro di famiglia: non attivo (FAMILY_LOG_TOKEN assente), la pagina resta in sola lettura")
+    elif token_problem(token):
+        _problem("warning", f"registro di famiglia non attivo: {token_problem(token)}")
+    else:
+        _say("registro di famiglia: attivo")
     return EXIT_OK
 
 
@@ -65,15 +73,34 @@ def cmd_sync(args: argparse.Namespace) -> int:
     site_url = os.environ.get("SITE_URL", "").strip() or None
     now = datetime.now(timezone.utc).replace(microsecond=0)
 
+    fetched_page: list[PreviousPage] = []
+
+    def load_previous() -> PreviousPage:
+        # Fetched at most once: both a failed portal and a failed log may need it.
+        if not fetched_page:
+            fetched_page.append(
+                previous_from_site(site_url, family_passphrase=family, owner_passphrase=owner)
+            )
+        return fetched_page[0]
+
     snapshot, report = collect(
-        config,
-        credentials,
-        fetch=fetch_property,
-        load_previous=lambda: previous_from_site(
-            site_url, family_passphrase=family, owner_passphrase=owner
-        ),
-        now=now,
+        config, credentials, fetch=fetch_property, load_previous=load_previous, now=now
     )
+    # The family's own entries. FAMILY_LOG_TOKEN is optional: without it the page is read-only.
+    family_layer = family_state(
+        config,
+        token=os.environ.get("FAMILY_LOG_TOKEN", "").strip() or None,
+        repository=os.environ.get("GITHUB_REPOSITORY", "").strip() or None,
+        family_passphrase=family,
+        old_family_passphrase=os.environ.get("OLD_FAMILY_PASSPHRASE", "").strip() or None,
+        load_previous=load_previous,
+        api=os.environ.get("GITHUB_API_URL", "").strip() or "https://api.github.com",
+    )
+    snapshot.entries, snapshot.log = family_layer.entries, family_layer.log
+    if family_layer.warnings:
+        report.warnings["registro"] = family_layer.warnings
+    if family_layer.log:
+        _say("registro di famiglia: letto")
     for prop_id in report.fresh:
         _say(f"{prop_id}: letto")
     for prop_id, notes in report.warnings.items():

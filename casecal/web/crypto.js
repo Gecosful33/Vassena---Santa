@@ -4,6 +4,10 @@ var CaseCalCrypto = (function () {
 
   var AAD_FAMILY = "casecal/v1/family";
   var AAD_OWNER = "casecal/v1/owner";
+  // The family's own entries travel as small encrypted events (casecal/family.py).
+  var AAD_LOG = "casecal/v1/log";
+  var EVENT_PREFIX = "casecal:1:";
+  var EVENT_PAD = 256;
 
   function subtle() {
     var api = (typeof globalThis !== "undefined" ? globalThis.crypto : null) || null;
@@ -78,6 +82,42 @@ var CaseCalCrypto = (function () {
     return { tier: "owner", family: family, owner: owner, familyKey: familyKey, ownerKey: keyBytes };
   }
 
+  /**
+   * Encrypt a JSON value the way casecal/crypto.py does: space-padded to a block,
+   * so the length does not follow the text, then AES-GCM under a fresh nonce.
+   */
+  async function encryptBlob(keyBytes, value, aad, pad) {
+    var plain = new TextEncoder().encode(JSON.stringify(value));
+    var padded = new Uint8Array(plain.length + (pad - plain.length % pad) % pad).fill(32);
+    padded.set(plain);
+    var iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+    var key = await subtle().importKey("raw", keyBytes, "AES-GCM", false, ["encrypt"]);
+    var sealed = await subtle().encrypt(
+      { name: "AES-GCM", iv: iv, additionalData: new TextEncoder().encode(aad) }, key, padded
+    );
+    return { iv: bytesToB64(iv), ct: bytesToB64(new Uint8Array(sealed)) };
+  }
+
+  /** One change to the family's entries, as the text of a log comment. */
+  async function encodeEvent(keyBytes, event) {
+    var blob = await encryptBlob(keyBytes, event, AAD_LOG, EVENT_PAD);
+    return EVENT_PREFIX + blob.iv + ":" + blob.ct;
+  }
+
+  /** The event in a log comment, or null if it is not ours or this key cannot open it. */
+  async function decodeEvent(keyBytes, body) {
+    if (typeof body !== "string" || body.slice(0, EVENT_PREFIX.length) !== EVENT_PREFIX) return null;
+    var parts = body.slice(EVENT_PREFIX.length).trim().split(":");
+    if (parts.length !== 2) return null;
+    var event;
+    try {
+      event = await decryptBlob(keyBytes, { iv: parts[0], ct: parts[1] }, AAD_LOG);
+    } catch (err) {
+      return null;
+    }
+    return event && typeof event === "object" && !Array.isArray(event) ? event : null;
+  }
+
   /** Decrypt only the owner tier (used when the family view is already open). */
   async function unlockOwner(envelope, keyBytes) {
     var owner = await decryptBlob(keyBytes, envelope.owner, AAD_OWNER);
@@ -91,7 +131,9 @@ var CaseCalCrypto = (function () {
     deriveKey: deriveKey,
     decryptBlob: decryptBlob,
     unlock: unlock,
-    unlockOwner: unlockOwner
+    unlockOwner: unlockOwner,
+    encodeEvent: encodeEvent,
+    decodeEvent: decodeEvent
   };
 })();
 if (typeof module !== "undefined" && module.exports) { module.exports = CaseCalCrypto; }

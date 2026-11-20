@@ -1,7 +1,8 @@
 name: Aggiornamento notturno
 
 # Legge i portali dei gestori, costruisce la pagina cifrata e la pubblica su GitHub Pages.
-# Nessun dato viene scritto nel repository: la pagina è un artefatto di deploy.
+# Nessun dato viene scritto nel repository: la pagina è un artefatto di deploy. Le voci
+# inserite dalla famiglia stanno, cifrate, nei commenti di una issue di questo repository.
 #
 # Questo repository è pubblico, quindi lo sono anche questi log. Il programma stampa solo
 # l'esito per casa e il tipo di errore: mai contenuti delle pagine, indirizzi o credenziali.
@@ -64,6 +65,12 @@ jobs:
           VASSENA_KB_URL: ${{ secrets.VASSENA_KB_URL }}
           VASSENA_KB_USER: ${{ secrets.VASSENA_KB_USER }}
           VASSENA_KB_PASS: ${{ secrets.VASSENA_KB_PASS }}
+          # Facoltativi. FAMILY_LOG_TOKEN attiva «Chi usa la casa»: un token fine-grained
+          # limitato alle Issues di questo repository (vedi README); senza, la pagina resta
+          # in sola lettura. OLD_FAMILY_PASSPHRASE serve per una sola esecuzione dopo aver
+          # cambiato la password di famiglia.
+          FAMILY_LOG_TOKEN: ${{ secrets.FAMILY_LOG_TOKEN }}
+          OLD_FAMILY_PASSPHRASE: ${{ secrets.OLD_FAMILY_PASSPHRASE }}
           SITE_URL: ${{ steps.pages.outputs.base_url }}
         run: python -m casecal sync --out dist
 

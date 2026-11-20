@@ -228,6 +228,7 @@ def test_reading_a_house_end_to_end():
     assert len(snapshot.reservations) == 2
     assert snapshot.warnings == []
     assert (snapshot.check_in_time, snapshot.check_out_time) == ("15:00", "11:00")
+    assert snapshot.portal_url == BASE + "/property/details/id/7"  # where the owner closes dates by hand
     assert "Rossi" not in repr(snapshot) and "Verdi" not in repr(snapshot)
     asked = [call[3] for call in session.calls if call[1] == "/demo/vr/stats"]
     assert asked == [{}, {"year": "2026", "apt": "7"}, {"year": "2027", "apt": "7"}]

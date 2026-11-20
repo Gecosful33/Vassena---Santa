@@ -1,6 +1,9 @@
 /* Tokens: neutral chrome plus a categorical palette validated for colour-vision
-   deficiency in both modes (two houses: slots 1 and 2, worst pair dE 24.7 light /
-   26.8 dark under protanopia). Text always wears text tokens, never a series hue. */
+   deficiency in both modes. The eight hues are the reference palette's, with violet
+   moved to the first slot (the first house) and blue to the seventh: an order that
+   passes every adjacent-pair gate in both modes. Two houses use slots 1 and 2, violet
+   and orange: worst simulated pair dE 29.1 light / 26.0 dark.
+   Text always wears text tokens, never a series hue. */
 :root {
   color-scheme: light dark;
   --page: #f9f9f7;
@@ -13,14 +16,15 @@
   --axis: #c3c2b7;
   --border: rgba(11, 11, 11, 0.10);
   --shadow: 0 6px 24px rgba(11, 11, 11, 0.12);
-  --series-1: #2a78d6;
+  --series-1: #6250d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
   --series-4: #eda100;
   --series-5: #e87ba4;
   --series-6: #008300;
-  --series-7: #6250d6;
+  --series-7: #2a78d6;
   --series-8: #e34948;
+  --on-series: #ffffff; /* text on a solid series colour */
   --good: #0ca30c;
   --warning: #fab219;
   --critical: #d03b3b;
@@ -47,14 +51,17 @@
     --axis: #383835;
     --border: rgba(255, 255, 255, 0.10);
     --shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
-    --series-1: #3987e5;
+    --series-1: #9085e9;
     --series-2: #d95926;
     --series-3: #199e70;
     --series-4: #c98500;
     --series-5: #d55181;
     --series-6: #0ca30c;
-    --series-7: #9085e9;
+    --series-7: #3987e5;
     --series-8: #e66767;
+    /* The series colours are lighter here: dark text reads better on every one of them
+       (5.0:1 or more, against 3.1:1 to 3.9:1 for white). */
+    --on-series: #0b0b0b;
     --critical: #e66767;
     --accent: #3987e5;
   }
@@ -89,11 +96,15 @@ button, input { font: inherit; color: inherit; }
   min-height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--border);
   background: var(--surface-1); color: var(--text-primary); font-size: 14px; font-weight: 500;
   cursor: pointer; text-decoration: none; white-space: nowrap;
+  /* The pressed state below replaces the browser's own flash, which would otherwise
+     be painted over a sheet that the tap has just opened. */
+  -webkit-tap-highlight-color: transparent;
 }
-.btn:hover { background: var(--surface-2); }
+.btn:hover, .btn:active { background: var(--surface-2); }
 .btn[disabled] { opacity: 0.6; cursor: progress; }
 .btn.primary { background: var(--accent); border-color: transparent; color: var(--on-accent); }
 .btn.primary:hover { filter: brightness(1.07); }
+.btn.primary:active { filter: brightness(0.93); }
 .btn.quiet { border-color: transparent; background: none; color: var(--text-secondary); padding: 0 8px; }
 .btn.quiet:hover { background: var(--surface-2); color: var(--text-primary); }
 
@@ -198,11 +209,14 @@ button, input { font: inherit; color: inherit; }
   min-width: 16px; height: 16px; padding: 0 3px; border-radius: 999px;
   font-size: 10px; font-weight: 700; line-height: 1; letter-spacing: 0;
 }
-.legend .tag { background: var(--hue); color: #ffffff; }
+.legend .tag { background: var(--hue); color: var(--on-series); }
 .chip { display: inline-block; flex: none; width: 26px; height: 12px; border-radius: 999px; }
 .chip.solid { background: var(--text-secondary); }
 .chip.pale { background: var(--surface-3); box-shadow: inset 0 0 0 1px var(--axis); }
 .chip.none { box-shadow: inset 0 0 0 1px var(--axis); }
+.chip.mid { background: var(--text-muted); }
+.chip.dashed { outline: 2px dashed var(--text-muted); outline-offset: -2px; }
+.hint.tap { margin-top: 12px; }
 
 .key { display: grid; gap: 12px; }
 .hours { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); }
@@ -248,10 +262,19 @@ button, input { font: inherit; color: inherit; }
   font-size: 11px; font-weight: 650; line-height: 1;
 }
 .bar .txt { flex: none; }
-.bar.booking { background: var(--hue); color: #ffffff; }
+.bar.booking { background: var(--hue); color: var(--on-series); }
 .bar.booking .tag { background: rgba(255, 255, 255, 0.94); color: #0b0b0b; }
 .bar.closed { background: var(--surface-3); background: color-mix(in srgb, var(--hue) 26%, #ffffff); color: #3d3c3a; }
-.bar.closed .tag { background: var(--hue); color: #ffffff; }
+.bar.closed .tag { background: var(--hue); color: var(--on-series); }
+/* The family's own periods sit over the manager's bars: a mid tint when the nights are
+   really blocked on the portal, a dashed outline while they are still for sale. */
+.bar.family { z-index: 1; background: color-mix(in srgb, var(--hue) 55%, #ffffff); color: #0b0b0b; }
+.bar.family .tag { background: rgba(255, 255, 255, 0.94); color: #0b0b0b; }
+.bar.family.pending, .bar.family.unknown, .bar.family.conflict {
+  background: var(--surface-1); color: var(--text-primary); outline: 2px dashed var(--hue); outline-offset: -2px;
+}
+.bar.family.conflict { outline: 2px solid var(--critical); }
+.bar.family.pending .tag, .bar.family.unknown .tag, .bar.family.conflict .tag { background: var(--hue); color: var(--on-series); }
 .bar.cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 4px; }
 .bar.cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .bar.past { opacity: 0.45; }
@@ -259,6 +282,10 @@ button, input { font: inherit; color: inherit; }
 .single .bar { font-size: 12px; padding-left: 3px; }
 @media (prefers-color-scheme: dark) {
   .bar.closed { background: var(--surface-3); background: color-mix(in srgb, var(--hue) 38%, #1a1a19); color: #dddcd4; }
+  .bar.family { background: color-mix(in srgb, var(--hue) 62%, #1a1a19); color: #ffffff; }
+  /* A past stay is faded into the dark surface: there light text is the one that reads. */
+  .bar.booking.past { color: #ffffff; }
+  .bar.family.pending, .bar.family.unknown, .bar.family.conflict { background: var(--surface-1); color: var(--text-primary); }
 }
 
 .tip {
@@ -269,10 +296,64 @@ button, input { font: inherit; color: inherit; }
 .tip-title { font-weight: 650; margin-bottom: 6px; }
 .tip-title::first-letter { text-transform: uppercase; }
 .tip-row { display: grid; grid-template-columns: 14px 1fr; column-gap: 8px; align-items: center; padding: 3px 0; }
-.tip-row .key { width: 14px; height: 3px; border-radius: 2px; background: var(--hue); }
+.tip-row .dash { width: 14px; height: 3px; border-radius: 2px; background: var(--hue); }
 .tip-row strong { font-weight: 650; }
 .tip-row .who { color: var(--text-secondary); }
 .tip-row .detail { grid-column: 2; color: var(--text-secondary); font-size: 12px; }
+.tip-row .fam { color: var(--text-primary); }
+
+/* ---------- the family's entries ---------- */
+.entries { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 10px; }
+.entry { display: grid; gap: 4px; padding: 12px; border-radius: 12px; background: var(--surface-2); justify-items: start; }
+.entry-who { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 15px; }
+.entry-who .sub, .entry-state .sub { color: var(--text-muted); font-size: 12px; }
+.entry-dates { font-size: 14px; font-variant-numeric: tabular-nums; }
+.entry-note { font-size: 13px; color: var(--text-secondary); }
+.entry-state { display: flex; gap: 6px; align-items: flex-start; font-size: 13px; }
+.entry-state .ico { margin-top: 1px; }
+.entry-state .sub { display: block; }
+.entry .btn { margin-top: 4px; min-height: 36px; }
+.people .now { margin: 8px 0 0; font-size: 14px; }
+.people .hint + .hint, .people .hint + .now { margin-top: 6px; }
+.todo { display: grid; gap: 10px; padding: 12px; margin-bottom: 14px; border-radius: 12px; background: var(--surface-2); }
+.todo h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
+.todo h4 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
+.todo .btn { margin-top: 8px; }
+.plain { list-style: none; margin: 4px 0 0; padding: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+
+/* ---------- sheets (day details, entry form) ---------- */
+.sheet {
+  width: min(520px, calc(100vw - 24px)); max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px);
+  padding: 0; border: 0; border-radius: 16px; background: var(--surface-1); color: var(--text-primary);
+  box-shadow: var(--shadow); overflow: auto;
+}
+.sheet::backdrop { background: rgba(11, 11, 11, 0.5); }
+.sheet-head {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px 10px; background: var(--surface-1);
+}
+.sheet-head h2 { font-size: 17px; font-weight: 650; }
+.sheet-head h2::first-letter { text-transform: uppercase; }
+.sheet-body { display: grid; gap: 16px; padding: 4px 16px 18px; }
+.sheet-house { display: grid; gap: 8px; justify-items: start; }
+.sheet-house .house-head .tag { min-width: 20px; height: 20px; font-size: 11px; background: var(--hue); color: var(--on-series); }
+.sheet-house .now { margin-top: 0; }
+.sheet-house .entries { width: 100%; margin-top: 0; }
+.sheet-house + .sheet-house { padding-top: 16px; border-top: 1px solid var(--grid); }
+.form { gap: 14px; }
+/* Side by side where two date fields fit, one under the other on a phone: a date field
+   has a width of its own that it will not go below. */
+.form .pair { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 12px; }
+.form .input { min-width: 0; }
+.form select.input { appearance: auto; }
+.preview { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; color: var(--text-secondary); }
+.preview:empty { display: none; }
+.preview strong { color: var(--text-primary); font-weight: 650; }
+.preview .ico { margin-top: 1px; }
+.sheet-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.sheet-actions .primary { flex: 1 1 auto; min-height: 44px; }
+.btn.danger { color: var(--critical); }
+.btn.danger.armed { background: var(--critical); border-color: transparent; color: #ffffff; }
 
 /* ---------- stays ---------- */
 .stays { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
@@ -313,7 +394,6 @@ button, input { font: inherit; color: inherit; }
 .kpi-tables h3 .swatch { width: 12px; height: 12px; border-radius: 4px; }
 .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .kpi td, .kpi th { padding-right: 12px; white-space: nowrap; }
-.kpi.months td:first-child::first-letter { text-transform: uppercase; }
 .kpi-tables h4 { margin-top: 14px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
 .kpi-tables .hint { margin-top: 6px; font-size: 12px; }
 /* The month stays in view while the amounts scroll sideways on a phone. */

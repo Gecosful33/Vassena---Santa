@@ -63,8 +63,9 @@ def test_the_csp_pins_exactly_the_inlined_code(built):
     assert f"style-src '{_sha256(style)}'" in csp
     assert "default-src 'none'" in csp
     assert "unsafe-inline" not in csp and "unsafe-eval" not in csp
-    # default-src 'none' with no connect-src: the page cannot send anything anywhere.
-    assert "connect-src" not in csp
+    # The family's entries live on GitHub as ciphertext: that API is the only host allowed.
+    assert "connect-src https://api.github.com;" in csp
+    assert csp.count("https://") == 1
 
 
 def test_the_page_loads_nothing_from_the_network(built):
@@ -78,6 +79,122 @@ def test_the_code_never_parses_strings_as_markup():
     script = "".join(site._read(name) for name in site.SCRIPTS)
     for sink in ("innerHTML", "outerHTML", "insertAdjacentHTML", "document.write", "eval("):
         assert sink not in script
+
+
+# --------------------------------------------------------------------------- colours
+#
+# The eight hues of the reference palette, light and dark. Their order is what keeps
+# neighbouring series apart for colour-blind readers, so it is fixed here: violet first
+# (the first house), orange second, blue moved to the seventh slot.
+
+PALETTE = {
+    "light": ["#6250d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#2a78d6", "#e34948"],
+    "dark": ["#9085e9", "#d95926", "#199e70", "#c98500", "#d55181", "#0ca30c", "#3987e5", "#e66767"],
+}
+
+
+def _series(css: str) -> dict[str, list[str]]:
+    light, dark = css.split("@media (prefers-color-scheme: dark)", 1)
+    dark = dark.split("\n}\n", 1)[0]
+    return {
+        mode: [value for _, value in sorted(re.findall(r"--series-(\d):\s*(#[0-9a-f]{6});", block))]
+        for mode, block in (("light", light), ("dark", dark))
+    }
+
+
+def test_the_first_house_is_violet_and_the_palette_keeps_its_validated_order():
+    css = site._read("style.css")
+    assert _series(css) == PALETTE
+    slots = re.findall(r"^\.p(\d) \{ --hue: var\(--series-(\d)\); \}$", css, re.MULTILINE)
+    assert slots == [(str(n), str(n + 1)) for n in range(8)]  # house n wears slot n + 1
+
+
+def test_text_on_a_series_colour_is_a_token_with_a_value_for_each_mode():
+    css = site._read("style.css")
+    assert re.findall(r"--on-series:\s*(#[0-9a-f]{6});", css) == ["#ffffff", "#0b0b0b"]  # light, then dark
+    # Nothing writes white straight onto a series colour any more.
+    assert not re.search(r"background: var\(--hue\); color: #", css)
+
+
+# --------------------------------------------------------------------------- class names
+#
+# The stylesheet is one flat list of class names. Using the same word for two different
+# things once turned the monthly statistics table into the calendar's grid of months
+# (both were "months"), with header, rows and totals side by side.
+
+def _own_layout_rules(css: str) -> set[str]:
+    """Classes with a rule of their own (selector exactly ``.name``) that lays content out."""
+    found = set()
+    for selectors, body in re.findall(r"([^{}]+)\{([^{}]*)\}", re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)):
+        if not re.search(r"\b(?:display|position|grid-template\w*|flex\w*)\s*:", body):
+            continue
+        for selector in selectors.split(","):
+            match = re.fullmatch(r"\.([A-Za-z][\w-]*)", selector.strip())
+            if match:
+                found.add(match.group(1))
+    return found
+
+
+def _class_expressions(script: str) -> list[tuple[str, str]]:
+    """``(tag, class expression)`` for every ``el("tag", { ... class: ... })`` in the script."""
+    found = []
+    for match in re.finditer(r'\bel\("(\w+)",\s*\{', script):
+        depth, end = 0, match.end() - 1
+        while end < len(script):
+            depth += {"{": 1, "}": -1}.get(script[end], 0)
+            if depth == 0:
+                break
+            end += 1
+        attributes = script[match.end():end]
+        start = re.search(r"\bclass:\s*", attributes)
+        if not start:
+            continue
+        expression = attributes[start.end():]
+        next_attribute = re.search(r',\s*(?:[A-Za-z_]\w*|"[^"]*")\s*:', expression)
+        found.append((match.group(1), expression[: next_attribute.start()] if next_attribute else expression))
+    return found
+
+
+def _tags_by_class(script: str) -> dict[str, set[str]]:
+    tags: dict[str, set[str]] = {}
+    for tag, expression in _class_expressions(script):
+        for literal in re.findall(r'"([^"]*)"', expression):
+            for name in literal.split():
+                tags.setdefault(name, set()).add(tag)
+    return tags
+
+
+# One component drawn with two elements on purpose.
+SHARED_ON_PURPOSE = {
+    "bar": {"div", "i"},            # a stay in the calendar, and its sample in the legend
+    "btn": {"a", "button"},         # a button, and a link that looks like one
+    "sheet-body": {"div", "form"},  # the body of a sheet, whether it is a form or not
+}
+TABLE_PARTS = {"table", "thead", "tbody", "tfoot", "tr", "td", "th"}
+
+
+def test_the_scan_of_class_names_sees_the_script():
+    tags = _tags_by_class(site._read("app.js"))
+    assert tags["rows"] == {"table"} and tags["months"] == {"div"} and tags["day"] == {"button"}
+    assert {"months", "key", "bar", "sheet-body"} <= _own_layout_rules(site._read("style.css"))
+
+
+def test_a_class_that_lays_out_its_content_names_one_kind_of_element():
+    layout, tags = _own_layout_rules(site._read("style.css")), _tags_by_class(site._read("app.js"))
+    for name in sorted(layout):
+        used_on = tags.get(name, set())
+        assert len(used_on) <= 1 or used_on == SHARED_ON_PURPOSE.get(name), (
+            f"class {name!r} has a layout rule of its own and is put on {sorted(used_on)}: use two names"
+        )
+        assert not used_on & TABLE_PARTS, f"class {name!r} would lay a table out as something else"
+
+
+def test_tables_take_no_class_from_outside_their_builder():
+    # A class handed in as an argument is invisible where the table is built, and to the test above.
+    tables = [expression for tag, expression in _class_expressions(site._read("app.js")) if tag == "table"]
+    assert len(tables) >= 2
+    for expression in tables:
+        assert re.fullmatch(r'\s*"[\w -]+"\s*', expression), f"table classes must be a plain literal, not {expression.strip()}"
 
 
 def test_the_title_is_escaped(built):

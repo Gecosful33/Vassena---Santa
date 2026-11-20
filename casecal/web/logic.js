@@ -152,25 +152,18 @@ var CaseCalLogic = (function () {
   }
 
   /**
-   * Maximal runs of free nights from `fromDay` to the end of the known data.
-   * `open` marks the last run, which ends only because the data does.
+   * The guests in the house or still to come, from `today` on: the stays with guests
+   * that have not ended yet, soonest first. Dates blocked without guests are not listed.
+   * `current` marks the guests in the house on the night of `today`; `inDays` is how
+   * far away the check-in is (0 for today, and for guests already there).
    */
-  function freeWindows(prop, fromDay) {
-    var windows = [];
-    if (prop.missing) return windows;
-    var cursor = Math.max(fromDay, prop.from);
-    for (var i = 0; i < prop.stays.length; i++) {
-      var stay = prop.stays[i];
-      if (stay.end <= cursor) continue;
-      if (stay.start > cursor) {
-        windows.push({ start: cursor, end: stay.start, nights: stay.start - cursor, open: false });
-      }
-      cursor = Math.max(cursor, stay.end);
-    }
-    if (cursor < prop.to) {
-      windows.push({ start: cursor, end: prop.to, nights: prop.to - cursor, open: true });
-    }
-    return windows;
+  function upcomingGuests(prop, today) {
+    if (prop.missing) return [];
+    return prop.stays.filter(function (stay) {
+      return stay.kind === "booking" && stay.end > today;
+    }).map(function (stay) {
+      return { stay: stay, current: stay.start <= today, inDays: Math.max(0, stay.start - today) };
+    });
   }
 
   /** Months (as {y, m}) touched by the days in [fromDay, toDay). */
@@ -246,6 +239,192 @@ var CaseCalLogic = (function () {
     if (part < 1e-9) part = 0;
     if (isRightEdge && part === 0 && cell > 0) { cell -= 1; part = 1; }
     return { cell: cell, part: part };
+  }
+
+  /* ---- the family's own entries ----
+   * Who uses a house when, written by family members in the page (casecal/family.py).
+   * An entry is a diary note, not a booking: it closes nothing on the manager's system.
+   * Whether its nights are really blocked there is worked out here, against the portal data.
+   * Entries come from a shared log and are validated like any other untrusted input.
+   */
+
+  var ENTRY_ID = /^[A-Za-z0-9_-]{8,40}$/, HOUSE_ID = /^[a-z][a-z0-9-]{0,30}$/;
+  var YMD = /^\d{4}-\d{2}-\d{2}$/, STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+  var LIMITS = { who: 80, note: 200, by: 40 };
+  var MAX_ENTRIES = 2000;
+  // Bounds that keep a slip of the finger (year 2207, a ten-year stay) out of the diary.
+  var MAX_NIGHTS = 366, FIRST_DAY = dayOf(2000, 1, 1), LAST_DAY = dayOf(2100, 1, 1);
+
+  function tidyText(raw, limit, required) {
+    if (raw === null || raw === undefined) raw = "";
+    if (typeof raw !== "string") return null;
+    var text = raw.replace(/[\u0000-\u001f\u007f]/g, " ").trim();
+    return text.length > limit || (required && !text) ? null : text;
+  }
+  function realDay(raw) {
+    if (typeof raw !== "string" || !YMD.test(raw)) return null;
+    var day = dayFromYmd(raw);
+    return ymd(day) === raw ? day : null; // refuses 30 February
+  }
+
+  /** A well-formed entry in working shape (days as numbers), or null. */
+  function validEntry(raw) {
+    if (!raw || typeof raw !== "object") return null;
+    if (typeof raw.id !== "string" || !ENTRY_ID.test(raw.id)) return null;
+    if (typeof raw.prop !== "string" || !HOUSE_ID.test(raw.prop)) return null;
+    var start = realDay(raw.start), end = realDay(raw.end);
+    if (start === null || end === null || !(end > start)) return null;
+    if (start < FIRST_DAY || end > LAST_DAY || end - start > MAX_NIGHTS) return null;
+    var who = tidyText(raw.who, LIMITS.who, true), note = tidyText(raw.note, LIMITS.note, false);
+    var by = tidyText(raw.by, LIMITS.by, false);
+    if (who === null || note === null || by === null) return null;
+    return {
+      id: raw.id, prop: raw.prop, start: start, end: end, who: who, note: note, by: by,
+      at: typeof raw.at === "string" && STAMP.test(raw.at) ? raw.at : ""
+    };
+  }
+
+  /** The stored form of an entry: what a "set" event and the published page carry. */
+  function entryRecord(entry) {
+    return { id: entry.id, prop: entry.prop, start: ymd(entry.start), end: ymd(entry.end),
+             who: entry.who, note: entry.note, by: entry.by, at: entry.at };
+  }
+
+  /**
+   * Replay events, oldest first, over a map of entries (id -> entry) and return a new map.
+   * "set" writes a whole entry, "del" removes one, "snap" replaces everything. A
+   * malformed event is skipped. Replaying events the map already reflects is harmless,
+   * so a change shown at once can be confirmed later by reading the log again.
+   */
+  function foldEvents(events, entries) {
+    var state = {};
+    Object.keys(entries || {}).forEach(function (id) { state[id] = entries[id]; });
+    (events || []).forEach(function (event) {
+      if (!event || typeof event !== "object") return;
+      if (event.t === "set") {
+        var entry = validEntry(event);
+        if (entry && (state[entry.id] || Object.keys(state).length < MAX_ENTRIES)) state[entry.id] = entry;
+      } else if (event.t === "del") {
+        if (typeof event.id === "string") delete state[event.id];
+      } else if (event.t === "snap" && Array.isArray(event.entries)) {
+        var listed = event.entries.slice(0, MAX_ENTRIES).map(validEntry);
+        if (listed.every(Boolean)) {
+          state = {};
+          listed.forEach(function (item) { state[item.id] = item; });
+        }
+      }
+    });
+    return state;
+  }
+
+  function entriesOf(entries, propId) {
+    return Object.keys(entries).map(function (id) { return entries[id]; })
+      .filter(function (entry) { return !propId || entry.prop === propId; })
+      .sort(function (a, b) { return a.start - b.start || (a.id < b.id ? -1 : 1); });
+  }
+
+  /**
+   * Where an entry stands against the manager's calendar.
+   * state: "blocked"  every night is closed to sale on the portal: nobody can book over it;
+   *        "pending"  some nights are still on sale: until the owner closes them, guests
+   *                   can book them;
+   *        "conflict" guests are booked on some of its nights (`guests` holds the first stay);
+   *        "unknown"  it cannot be told: the house's portal could not be read, or it
+   *                   publishes nothing yet for some of the nights.
+   * `open` lists, as [start, end) runs, the nights not known to be closed: those on
+   * sale and those the portal says nothing about.
+   */
+  function entryStatus(entry, prop) {
+    if (!prop || prop.missing) return { state: "unknown", open: [], guests: null };
+    var open = [], guests = null, run = null, onSale = false;
+    for (var day = entry.start; day < entry.end; day++) {
+      var info = dayInfo(prop, day);
+      if (info.state === "booking") guests = guests || info.night;
+      if (info.state === "booking" || info.state === "closed") { run = null; continue; }
+      if (info.state === "free") onSale = true;
+      if (run) run.end = day + 1;
+      else { run = { start: day, end: day + 1 }; open.push(run); }
+    }
+    var state = guests ? "conflict" : onSale ? "pending" : open.length ? "unknown" : "blocked";
+    return { state: state, open: open, guests: guests };
+  }
+
+  /**
+   * Can this entry be saved? Returns { ok } or { ok: false, code, detail }.
+   * codes: "house", "who", "dates" (check-out not after check-in, or a date out of
+   *        range), "long" (more than a year), "guests" (detail: the guests' stay),
+   *        "overlap" (detail: the family entry already on those nights).
+   * `props` are the prepared houses, `entries` the current map; an entry being
+   * edited does not clash with its own earlier version.
+   */
+  function checkEntry(candidate, props, entries) {
+    var prop = null;
+    props.forEach(function (item) { if (item.id === candidate.prop) prop = item; });
+    if (!prop) return { ok: false, code: "house" };
+    if (tidyText(candidate.who, LIMITS.who, true) === null) return { ok: false, code: "who" };
+    if (typeof candidate.start !== "number" || typeof candidate.end !== "number" ||
+        isNaN(candidate.start) || isNaN(candidate.end) || !(candidate.end > candidate.start) ||
+        candidate.start < FIRST_DAY || candidate.end > LAST_DAY) {
+      return { ok: false, code: "dates" };
+    }
+    if (candidate.end - candidate.start > MAX_NIGHTS) return { ok: false, code: "long" };
+    var status = entryStatus(candidate, prop);
+    if (status.state === "conflict") return { ok: false, code: "guests", detail: status.guests };
+    var clash = entriesOf(entries, candidate.prop).filter(function (other) {
+      return other.id !== candidate.id && other.start < candidate.end && candidate.start < other.end;
+    })[0];
+    return clash ? { ok: false, code: "overlap", detail: clash } : { ok: true };
+  }
+
+  /**
+   * The first day from `day` on whose night has neither guests nor a family period.
+   * Falls back to `day` when the known data holds none.
+   */
+  function firstOpenDay(prop, day, entries) {
+    var taken = entriesOf(entries, prop.id);
+    function inUse(night) {
+      return taken.some(function (entry) { return entry.start <= night && night < entry.end; });
+    }
+    for (var candidate = day; covered(prop, candidate); candidate++) {
+      if (dayInfo(prop, candidate).state !== "booking" && !inUse(candidate)) return candidate;
+    }
+    return day;
+  }
+
+  /**
+   * Dates to propose for a new period of `prop` that includes the night of `day`, as
+   * { prop, start, end }. The proposal never runs into a family period already there.
+   * On a night still for sale it is short: two nights, or one if a stay follows. Inside
+   * dates blocked on the portal it is what is left of the block when that is short
+   * enough to be one stay, otherwise a week of it from `day`.
+   */
+  function draftPeriod(prop, day, entries) {
+    var floor = -Infinity, ceiling = Infinity;
+    entriesOf(entries, prop.id).forEach(function (entry) {
+      if (entry.end <= day) floor = Math.max(floor, entry.end);
+      else if (entry.start > day) ceiling = Math.min(ceiling, entry.start);
+    });
+    var info = dayInfo(prop, day), start = day, end = day + 2;
+    if (info.state === "closed") {
+      var block = info.night;
+      if (block.end - block.start <= 21) {
+        start = Math.max(block.start, floor);
+        end = block.end;
+      } else {
+        end = Math.min(day + 7, block.end);
+      }
+    } else {
+      var status = nightStatus(prop, day);
+      if (status.state === "free" && status.until !== null) end = Math.min(end, status.until);
+    }
+    return { prop: prop.id, start: start, end: Math.max(start + 1, Math.min(end, ceiling)) };
+  }
+
+  /** A new entry id from random bytes (kept short: it is typed by nobody). */
+  function entryId(bytes) {
+    var alphabet = "abcdefghijklmnopqrstuvwxyz0123456789", id = "e_";
+    for (var i = 0; i < bytes.length; i++) id += alphabet[bytes[i] % alphabet.length];
+    return id;
   }
 
   /** Is the page, or a single house, older than the nightly schedule allows? */
@@ -413,8 +592,11 @@ var CaseCalLogic = (function () {
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,
     prepare: prepare, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
-    freeWindows: freeWindows, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
+    upcomingGuests: upcomingGuests, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
     weekSegments: weekSegments, cellPosition: cellPosition, clockMinutes: clockMinutes, freshness: freshness,
+    validEntry: validEntry, entryRecord: entryRecord, foldEvents: foldEvents, entriesOf: entriesOf,
+    entryStatus: entryStatus, checkEntry: checkEntry, entryId: entryId, MAX_NIGHTS: MAX_NIGHTS,
+    firstOpenDay: firstOpenDay, draftPeriod: draftPeriod,
     kpiYears: kpiYears, yearRows: yearRows, columnTotals: columnTotals, houseYear: houseYear, combine: combine,
     yearReservations: yearReservations, roleIndex: roleIndex, axisScale: axisScale
   };
