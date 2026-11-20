@@ -263,7 +263,7 @@ test("replay leaves its input alone and skips bad events", () => {
 
 test("a snapshot replaces everything before it", () => {
   const state = L.foldEvents([
-    setEvent(), { t: "snap", entries: [entry({ id: "e_kept000001", who: "Elvio" })] }, setEvent({ id: "e_after00001", who: "Nonna" })
+    setEvent(), { t: "snap", entries: [entry({ id: "e_kept000001", who: "Paolo" })] }, setEvent({ id: "e_after00001", who: "Nonna" })
   ], {});
   assert.deepEqual(Object.keys(state).sort(), ["e_after00001", "e_kept000001"]);
 });
@@ -347,7 +347,7 @@ test("saving is refused with a reason", () => {
     const c = { id: "e_new0000001", prop: "casa", start: day("2026-09-01"), end: day("2026-09-05"), who: "Giulia", ...overrides };
     return L.checkEntry(c, [p], existing);
   };
-  assert.deepEqual(candidate({}), { ok: true });
+  assert.deepEqual(candidate({}), { ok: true, shared: [] });
   assert.equal(candidate({ prop: "montagna" }).code, "house");
   assert.equal(candidate({ who: "  " }).code, "who");
   assert.equal(candidate({ end: day("2026-09-01") }).code, "dates");
@@ -356,15 +356,122 @@ test("saving is refused with a reason", () => {
   assert.equal(candidate({ start: day("2099-12-30"), end: day("2100-01-02") }).code, "dates");
   assert.equal(candidate({ start: 1e9, end: 1e9 + 2 }).code, "dates"); // a year no date field should produce
   assert.equal(candidate({ start: day("2026-09-01"), end: day("2027-09-03") }).code, "long");
-  assert.deepEqual(candidate({ start: day("2026-09-01"), end: day("2026-09-01") + L.MAX_NIGHTS }), { ok: true });
+  assert.equal(candidate({ start: day("2026-09-01"), end: day("2026-09-01") + L.MAX_NIGHTS }).ok, true);
   const guests = candidate({ start: day("2026-08-22"), end: day("2026-08-27") });
   assert.equal(guests.code, "guests");
   assert.equal(L.ymd(guests.detail.start), "2026-08-20");
-  const overlap = candidate({ start: day("2026-08-12"), end: day("2026-08-18") });
-  assert.deepEqual([overlap.code, overlap.detail.id], ["overlap", "e_k3j9x2m1q8"]);
-  // Back to back with another family stay is fine, and so is editing an entry over itself.
-  assert.deepEqual(candidate({ start: day("2026-08-14"), end: day("2026-08-18") }), { ok: true });
-  assert.deepEqual(candidate({ id: "e_k3j9x2m1q8", start: day("2026-08-11"), end: day("2026-08-15") }), { ok: true });
+});
+
+test("two family periods may share nights, and the check says with whom", () => {
+  const p = house([["2026-08-20", "2026-08-25", "b"]]);
+  const existing = L.foldEvents([
+    setEvent({ who: "Famiglia Rossi" }),                                                       // 10 -> 14 August
+    setEvent({ id: "e_second0001", who: "Famiglia Bianchi", start: "2026-08-13", end: "2026-08-16" })
+  ], {});
+  const shared = (overrides) => {
+    const c = { id: "e_new0000001", prop: "casa", start: day("2026-08-12"), end: day("2026-08-15"), who: "Zii", ...overrides };
+    const check = L.checkEntry(c, [p], existing);
+    assert.equal(check.ok, true);
+    return check.shared.map((other) => other.who);
+  };
+  assert.deepEqual(shared({}), ["Famiglia Rossi", "Famiglia Bianchi"]);       // listed by date
+  assert.deepEqual(shared({ start: day("2026-08-15"), end: day("2026-08-18") }), ["Famiglia Bianchi"]);
+  // Arriving the day another family leaves is not sharing, and a period is never listed against itself.
+  assert.deepEqual(shared({ start: day("2026-08-16"), end: day("2026-08-18") }), []);
+  assert.deepEqual(shared({ id: "e_k3j9x2m1q8", start: day("2026-08-10"), end: day("2026-08-13") }), []);
+  // Another house is another matter.
+  assert.deepEqual(L.checkEntry({ id: null, prop: "lago", start: day("2026-08-12"), end: day("2026-08-15"), who: "Zii" },
+    [p, { ...p, id: "lago" }], existing).shared, []);
+  // Guests are still a refusal, shared or not.
+  assert.equal(L.checkEntry({ id: null, prop: "casa", start: day("2026-08-13"), end: day("2026-08-22"), who: "Zii" }, [p], existing).code, "guests");
+});
+
+function names(run) { return run.entries.map((entry) => entry.who).join(" + "); }
+const at = (ymdText, hour) => day(ymdText) + hour / 24;
+
+test("periods that share nights are drawn as stretches, one bar for the nights in common", () => {
+  const p = house([["2026-08-01", "2026-08-31", "c"]]); // all blocked: hours 15:00 and 11:00
+  const runs = L.familyRuns(L.entriesOf(L.foldEvents([
+    setEvent({ who: "Rossi", start: "2026-08-10", end: "2026-08-20" }),
+    setEvent({ id: "e_second0001", who: "Bianchi", start: "2026-08-14", end: "2026-08-17" })
+  ], {}), "casa"), p);
+  assert.deepEqual(runs.map((run) => [names(run), run.from, run.to, run.joinLeft, run.joinRight]), [
+    ["Rossi", at("2026-08-10", 15), at("2026-08-14", 15), false, true],          // alone until the others check in...
+    ["Rossi + Bianchi", at("2026-08-14", 15), at("2026-08-17", 11), true, true], // ...together until they check out...
+    ["Rossi", at("2026-08-17", 11), at("2026-08-20", 11), true, false]           // ...alone again, with no gap anywhere
+  ]);
+});
+
+test("periods that do not share nights stay apart, turnover gap included", () => {
+  const p = house([]);
+  const runs = L.familyRuns(L.entriesOf(L.foldEvents([
+    setEvent({ who: "Rossi", start: "2026-08-10", end: "2026-08-14" }),
+    setEvent({ id: "e_second0001", who: "Bianchi", start: "2026-08-14", end: "2026-08-16" }), // same-day turnover
+    setEvent({ id: "e_third00001", who: "Zii", start: "2026-08-20", end: "2026-08-22" })
+  ], {}), "casa"), p);
+  assert.deepEqual(runs.map((run) => [names(run), run.from, run.to, run.joinLeft, run.joinRight]), [
+    ["Rossi", at("2026-08-10", 15), at("2026-08-14", 11), false, false],
+    ["Bianchi", at("2026-08-14", 15), at("2026-08-16", 11), false, false],
+    ["Zii", at("2026-08-20", 15), at("2026-08-22", 11), false, false]
+  ]);
+  assert.deepEqual(L.familyRuns([], p), []);
+});
+
+test("two periods on the very same dates are one stretch with both", () => {
+  const p = house([]);
+  const runs = L.familyRuns(L.entriesOf(L.foldEvents([
+    setEvent({ who: "Rossi" }), setEvent({ id: "e_second0001", who: "Bianchi" })
+  ], {}), "casa"), p);
+  assert.deepEqual(runs.map((run) => [names(run), run.joinLeft, run.joinRight]), [["Rossi + Bianchi", false, false]]);
+});
+
+test("a shared stretch takes the most urgent standing among its periods", () => {
+  // Blocked from the 10th to the 14th only; guests from the 18th.
+  const p = house([["2026-08-10", "2026-08-14", "c"], ["2026-08-18", "2026-08-20", "b"]]);
+  const runs = L.familyRuns(L.entriesOf(L.foldEvents([
+    setEvent({ who: "Rossi", start: "2026-08-10", end: "2026-08-14" }),                          // blocked
+    setEvent({ id: "e_second0001", who: "Bianchi", start: "2026-08-12", end: "2026-08-16" }),    // partly for sale
+    setEvent({ id: "e_third00001", who: "Zii", start: "2026-08-15", end: "2026-08-19" })         // guests on its last night
+  ], {}), "casa"), p);
+  assert.deepEqual(runs.map((run) => [names(run), run.state]), [
+    ["Rossi", "blocked"], ["Rossi + Bianchi", "pending"], ["Bianchi", "pending"],
+    ["Bianchi + Zii", "conflict"], ["Zii", "conflict"]
+  ]);
+});
+
+test("stretches are cut to a week row like stays are", () => {
+  const p = house([]);
+  const runs = L.familyRuns(L.entriesOf(L.foldEvents([
+    setEvent({ who: "Rossi", start: "2026-08-14", end: "2026-08-18" })   // Friday to Tuesday
+  ], {}), "casa"), p);
+  const [first, second] = L.monthWeeks(2026, 8).slice(2, 4);            // the weeks of the 10th and of the 17th
+  const [before] = L.clipToWeek(runs, first), [after] = L.clipToWeek(runs, second);
+  near(before.left, 4 + 15 / 24);  // Friday, from the check-in hour...
+  near(before.right, 7);           // ...to the end of the row
+  assert.deepEqual([before.cutLeft, before.cutRight, names(before.span)], [false, true, "Rossi"]);
+  near(after.left, 0);
+  near(after.right, 1 + 11 / 24);  // Tuesday, until the check-out hour
+  assert.deepEqual([after.cutLeft, after.cutRight], [true, false]);
+  assert.deepEqual(L.clipToWeek(runs, L.monthWeeks(2026, 8)[0]), []);
+});
+
+test("a name is shortened by dropping the word for family", () => {
+  assert.equal(L.shortName("Famiglia Rossi"), "Rossi");
+  assert.equal(L.shortName("famiglia rossi"), "rossi");
+  assert.equal(L.shortName("Fam. Bianchi"), "Bianchi");
+  assert.equal(L.shortName("Zii di Milano"), "Zii di Milano");
+  assert.equal(L.shortName("Famiglia"), "Famiglia"); // nothing would be left
+});
+
+const STATUS_CASES = require("../fixtures/entry_status.json");
+
+test("the page judges a period as the nightly job does", () => {
+  const calendar = L.prepare({ id: "casa", label: "Casa", unit: null, fetched_at: "2026-06-01T02:00:00Z", ...STATUS_CASES.house });
+  for (const item of STATUS_CASES.cases) {
+    const period = L.validEntry(entry({ start: item.start, end: item.end }));
+    assert.equal(L.entryStatus(period, calendar).state, item.state, item.why);
+  }
+  assert.ok(STATUS_CASES.cases.length >= 10);
 });
 
 test("whatever the form accepts, the log's readers accept too", () => {
@@ -376,7 +483,7 @@ test("whatever the form accepts, the log's readers accept too", () => {
   ];
   for (const dates of cases) {
     const c = { id: "e_new0000001", prop: "casa", who: "Giulia", ...dates };
-    assert.deepEqual(L.checkEntry(c, [p], {}), { ok: true });
+    assert.deepEqual(L.checkEntry(c, [p], {}), { ok: true, shared: [] });
     assert.ok(L.validEntry({ ...entry(), id: c.id, start: L.ymd(c.start), end: L.ymd(c.end) }) !== null);
   }
 });
@@ -408,7 +515,8 @@ test("a new period is proposed where nothing is in the way", () => {
   assert.deepEqual(draft("2026-08-14", taken), ["casa", "2026-08-14", "2026-08-15"]);
   for (const from of ["2026-08-08", "2026-08-14", "2026-08-13", "2026-08-18", "2026-08-19"]) {
     const d = L.draftPeriod(p, day(from), taken);
-    assert.deepEqual(L.checkEntry({ id: null, prop: "casa", who: "x", start: d.start, end: d.end }, [p], taken), { ok: true }, from);
+    // A proposal is always one that can be saved, and by default it does not land on another family's nights.
+    assert.deepEqual(L.checkEntry({ id: null, prop: "casa", who: "x", start: d.start, end: d.end }, [p], taken), { ok: true, shared: [] }, from);
   }
 });
 

@@ -203,6 +203,21 @@ var CaseCalLogic = (function () {
    * cutLeft / cutRight say the stay continues beyond this row.
    */
   function weekSegments(stays, week, inAt, outAt) {
+    return clipToWeek(stays.map(function (stay) {
+      return { from: stay.start + inAt, to: stay.end + outAt, stay: stay };
+    }), week).map(function (segment) {
+      var stay = segment.span.stay;
+      return { left: segment.left, right: segment.right, kind: stay.kind,
+               cutLeft: segment.cutLeft, cutRight: segment.cutRight, stay: stay };
+    });
+  }
+
+  /**
+   * The part of each span that falls in one week row, in column units (0..7).
+   * A span runs from `from` to `to`, both in days with the hour as a fraction.
+   * cutLeft / cutRight say the span continues beyond this row.
+   */
+  function clipToWeek(spans, week) {
     var c0 = -1, c1 = -1;
     for (var c = 0; c < 7; c++) {
       if (week[c] !== null) { if (c0 < 0) c0 = c; c1 = c; }
@@ -210,18 +225,17 @@ var CaseCalLogic = (function () {
     var segments = [];
     if (c0 < 0) return segments;
     var d0 = week[c0], limit = week[c1] + 1;
-    for (var i = 0; i < stays.length; i++) {
-      var stay = stays[i];
-      var xs = Math.max(stay.start + inAt, d0);
-      var xe = Math.min(stay.end + outAt, limit);
+    for (var i = 0; i < spans.length; i++) {
+      var span = spans[i];
+      var xs = Math.max(span.from, d0);
+      var xe = Math.min(span.to, limit);
       if (xe <= xs) continue;
       segments.push({
         left: c0 + (xs - d0),
         right: c0 + (xe - d0),
-        kind: stay.kind,
-        cutLeft: stay.start + inAt < d0,
-        cutRight: stay.end + outAt > limit,
-        stay: stay
+        cutLeft: span.from < d0,
+        cutRight: span.to > limit,
+        span: span
       });
     }
     return segments;
@@ -350,12 +364,13 @@ var CaseCalLogic = (function () {
   }
 
   /**
-   * Can this entry be saved? Returns { ok } or { ok: false, code, detail }.
+   * Can this entry be saved? Returns { ok: true, shared } or { ok: false, code, detail }.
    * codes: "house", "who", "dates" (check-out not after check-in, or a date out of
-   *        range), "long" (more than a year), "guests" (detail: the guests' stay),
-   *        "overlap" (detail: the family entry already on those nights).
+   *        range), "long" (more than a year), "guests" (detail: the guests' stay).
+   * Two family periods may share nights in a house: `shared` lists the other
+   * periods on some of the same nights, so that the form can say so before saving.
    * `props` are the prepared houses, `entries` the current map; an entry being
-   * edited does not clash with its own earlier version.
+   * edited is not listed against its own earlier version.
    */
   function checkEntry(candidate, props, entries) {
     var prop = null;
@@ -370,10 +385,54 @@ var CaseCalLogic = (function () {
     if (candidate.end - candidate.start > MAX_NIGHTS) return { ok: false, code: "long" };
     var status = entryStatus(candidate, prop);
     if (status.state === "conflict") return { ok: false, code: "guests", detail: status.guests };
-    var clash = entriesOf(entries, candidate.prop).filter(function (other) {
+    return { ok: true, shared: entriesOf(entries, candidate.prop).filter(function (other) {
       return other.id !== candidate.id && other.start < candidate.end && candidate.start < other.end;
-    })[0];
-    return clash ? { ok: false, code: "overlap", detail: clash } : { ok: true };
+    }) };
+  }
+
+  var STANDING = ["blocked", "unknown", "pending", "conflict"]; // from fine to most urgent
+
+  /**
+   * The family's periods of one house as the calendar draws them: the stretches of
+   * time during which the same periods are under way, each with those periods.
+   * Where two periods share nights there is one stretch holding both, so the house
+   * shows one bar with both names instead of two bars on top of each other.
+   *
+   * A period runs from the check-in hour of its first day to the check-out hour of
+   * its last (`inAt`, `outAt`: fractions of a day), so `from` and `to` are days with
+   * the hour as a fraction. `joinLeft` / `joinRight` say that the stretch touches
+   * the one before or after it: someone arrives or leaves while someone else stays.
+   * `state` is the most urgent standing among its periods (see entryStatus).
+   */
+  function familyRuns(entries, prop) {
+    var inAt = prop.hours.inAt, outAt = prop.hours.outAt;
+    var marks = [];
+    entries.forEach(function (entry) { marks.push(entry.start + inAt, entry.end + outAt); });
+    marks.sort(function (a, b) { return a - b; });
+    var runs = [];
+    for (var i = 0; i + 1 < marks.length; i++) {
+      var from = marks[i], to = marks[i + 1];
+      if (to - from < 1e-9) continue; // two periods beginning or ending at the same hour
+      var active = entries.filter(function (entry) {
+        return entry.start + inAt <= from + 1e-9 && to <= entry.end + outAt + 1e-9;
+      });
+      if (!active.length) continue;
+      var worst = 0;
+      active.forEach(function (entry) {
+        worst = Math.max(worst, STANDING.indexOf(entryStatus(entry, prop).state));
+      });
+      var last = runs[runs.length - 1];
+      var touching = !!last && Math.abs(last.to - from) < 1e-9;
+      if (touching) last.joinRight = true;
+      runs.push({ from: from, to: to, entries: active, state: STANDING[worst], joinLeft: touching, joinRight: false });
+    }
+    return runs;
+  }
+
+  /** "Famiglia Rossi" -> "Rossi": what is left of a name when a bar is short of room. */
+  function shortName(who) {
+    var short = who.replace(/^(famiglia|fam\.?)\s+/i, "");
+    return short || who;
   }
 
   /**
@@ -593,7 +652,8 @@ var CaseCalLogic = (function () {
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,
     prepare: prepare, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
     upcomingGuests: upcomingGuests, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
-    weekSegments: weekSegments, cellPosition: cellPosition, clockMinutes: clockMinutes, freshness: freshness,
+    weekSegments: weekSegments, clipToWeek: clipToWeek, cellPosition: cellPosition, clockMinutes: clockMinutes,
+    freshness: freshness, familyRuns: familyRuns, shortName: shortName,
     validEntry: validEntry, entryRecord: entryRecord, foldEvents: foldEvents, entriesOf: entriesOf,
     entryStatus: entryStatus, checkEntry: checkEntry, entryId: entryId, MAX_NIGHTS: MAX_NIGHTS,
     firstOpenDay: firstOpenDay, draftPeriod: draftPeriod,

@@ -109,7 +109,20 @@ button, input { font: inherit; color: inherit; }
 .btn.quiet:hover { background: var(--surface-2); color: var(--text-primary); }
 
 .field { display: grid; gap: 6px; }
-.field > label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.field > label, .field > .label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+/* One of a few names: large enough for a thumb, wrapping when the names are long. */
+.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.choices label { position: relative; display: block; }
+.choices input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.choices span {
+  display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--axis); background: var(--surface-1); font-size: 15px;
+}
+.choices input:checked + span {
+  border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600;
+  background: var(--surface-2); background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+}
+.choices input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .input {
   width: 100%; min-height: 44px; padding: 0 12px; border-radius: 10px;
   border: 1px solid var(--axis); background: var(--surface-1);
@@ -136,7 +149,7 @@ button, input { font: inherit; color: inherit; }
 .ico-free { color: var(--good); }
 .ico-warning { color: var(--warning); stroke-width: 2; }
 .ico-critical { color: var(--critical); stroke-width: 2; }
-.ico-booking, .ico-closed, .ico-unknown, .ico-lock { color: var(--text-muted); }
+.ico-booking, .ico-closed, .ico-unknown, .ico-lock, .ico-info { color: var(--text-muted); }
 
 /* ---------- lock screen ---------- */
 .lock { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
@@ -277,6 +290,14 @@ button, input { font: inherit; color: inherit; }
 .bar.family.pending .tag, .bar.family.unknown .tag, .bar.family.conflict .tag { background: var(--hue); color: var(--on-series); }
 .bar.cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 4px; }
 .bar.cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* Two family periods sharing nights: the stretches touch, so their meeting edges are
+   square, and the house's mark is not repeated at each one. */
+.bar.join-l {
+  border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 6px;
+  box-shadow: inset 1px 0 0 var(--surface-1); /* a hairline where someone arrives or leaves */
+}
+.bar.join-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.bar.join-l .tag { display: none; }
 .bar.past { opacity: 0.45; }
 .single .tag { min-width: 20px; height: 20px; font-size: 11px; }
 .single .bar { font-size: 12px; padding-left: 3px; }

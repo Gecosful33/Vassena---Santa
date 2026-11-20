@@ -345,8 +345,9 @@ def test_demo_builds_an_openable_page(monkeypatch, capsys, tmp_path, variant):
     assert bool(family["properties"][1].get("missing")) is (variant == "missing")
     assert len(owner["properties"]) == 2
     assert family["log"] == {"kind": "local"}  # edits made in the demo stay in the browser
+    assert family["groups"] == ["Famiglia Rossi", "Famiglia Bianchi"]
     # Also for a house that could not be read: the family's notes do not depend on the portal.
-    assert sorted(entry["prop"] for entry in family["entries"]) == ["lago", "mare"]
+    assert sorted(entry["prop"] for entry in family["entries"]) == ["lago", "mare", "mare"]
 
 
 @pytest.mark.parametrize(
@@ -376,4 +377,8 @@ def test_demo_data_is_valid_on_awkward_dates(moment):
         on_each = [next((s.kind for s in houses[entry.prop].stays if s.start <= night < s.end), None) for night in nights]
         assert BOOKING not in on_each
         kinds[entry.id] = set(on_each)
-    assert kinds == {"demo_blocked_1": {CLOSED}, "demo_pending_1": {None}}
+    assert kinds == {"demo_blocked_1": {CLOSED}, "demo_shared_1": {CLOSED}, "demo_pending_1": {None}}
+    # Two of them share nights in the same house: the calendar has one bar to draw for both.
+    by_id = {entry.id: entry for entry in snapshot.entries}
+    first, second = by_id["demo_blocked_1"], by_id["demo_shared_1"]
+    assert first.prop == second.prop and first.start < second.start < first.end < second.end

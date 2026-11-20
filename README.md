@@ -111,6 +111,13 @@ Le Issues devono essere attive nel repository (`Settings → General → Feature
 Issues`, lo sono per impostazione predefinita). Un token classico (`ghp_…`) viene
 rifiutato: non si può limitare a un solo repository.
 
+**Le famiglie da proporre nel modulo.** Un altro secret facoltativo, `FAMILY_GROUPS`,
+elenca le famiglie che usano le case, separate da punto e virgola (per esempio
+`Famiglia Rossi; Famiglia Bianchi`). Nel modulo diventano scelte fisse, con «Altro» per
+chiunque altro; senza questo secret il nome si scrive a mano. Sta in un secret e non in
+`properties.toml` perché il repository è pubblico: i nomi viaggiano solo nella parte
+cifrata della pagina.
+
 ## Cosa mostra la pagina
 
 | | Password di famiglia | Password della proprietà |
@@ -152,13 +159,23 @@ Tre stati, con lo stesso nome ovunque:
 I nomi degli ospiti e le nazionalità non vengono mai letti dal portale: il programma
 estrae solo date, canale, numero di ospiti e colonne di importi.
 
+**Soggiorni propri registrati come prenotazioni.** Alcuni gestori inseriscono i
+soggiorni dei proprietari come prenotazioni a importo zero invece che come date
+bloccate. Per le case che lo dichiarano in `properties.toml` con
+`unpaid_is_own_use = true`, una prenotazione con tutti gli importi a zero è trattata
+come date bloccate: non compare tra i prossimi ospiti e un periodo di famiglia su
+quelle notti risulta bloccato. Conta solo una riga di zeri espliciti; le statistiche
+dell'area proprietà restano quelle del portale, che quelle notti le conta come vendute.
+
 ### Chi usa la casa
 
 Un periodo si aggiunge con «Aggiungi un periodo» oppure toccando un giorno del
-calendario: casa, check-in, check-out, chi la usa, una nota facoltativa e il nome di
-chi scrive (il dispositivo lo ricorda). Chiunque può poi modificarlo o eliminarlo;
-l'eliminazione chiede conferma. Non ci sono utenti né permessi: vale la fiducia fra chi
-ha la password di famiglia, e il nome di chi scrive è quello che ciascuno dichiara.
+calendario: casa, check-in, check-out, chi la usa (una delle famiglie in elenco, o
+«Altro»), una nota facoltativa e il nome di chi scrive. Il dispositivo ricorda il nome
+e la famiglia scelta l'ultima volta. Chiunque può poi modificare o eliminare un
+periodo; l'eliminazione chiede conferma. Non ci sono utenti né permessi: vale la
+fiducia fra chi ha la password di famiglia, e il nome di chi scrive è quello che
+ciascuno dichiara.
 
 Il periodo compare nell'elenco e nel calendario, come barra sopra quelle del gestore,
 con il suo stato rispetto al portale:
@@ -166,20 +183,32 @@ con il suo stato rispetto al portale:
 | Stato | Significato |
 |---|---|
 | **Bloccata sul portale** | tutte le notti sono chiuse alla vendita: nessun ospite può prenotarle |
-| **Da bloccare sul portale** | alcune notti sono ancora in vendita (sono elencate): finché non vengono chiuse, un ospite può prenotarle |
+| **Da far bloccare al gestore** | alcune notti sono ancora in vendita (sono elencate): finché il gestore non le blocca, un ospite può prenotarle |
 | **Ci sono ospiti in quelle date** | dopo l'inserimento è arrivata una prenotazione: il periodo va spostato |
 | **Non verificabile sul portale** | il portale non pubblica ancora quelle date, o quella notte non è stato letto |
 
-Lo stato si aggiorna da solo a ogni lettura notturna dei portali. Chiudere le date
-resta un gesto del proprietario: nell'area proprietà l'elenco «Da chiudere sul portale
-del gestore» raccoglie le notti ancora scoperte, con il link alla scheda
-dell'appartamento sul portale (se il gestore non consente al proprietario di chiudere
-le date da lì, vanno chieste a lui).
+Lo stato si aggiorna da solo a ogni lettura notturna dei portali. Bloccare le date è
+compito del gestore, su richiesta del proprietario: la pagina non scrive nulla sui
+portali e non manda richieste a nessuno. Nell'area proprietà l'elenco «Da far bloccare
+al gestore» raccoglie le notti ancora scoperte, con un link al portale per controllare.
 
-La pagina rifiuta un periodo che cade su notti con ospiti, che si sovrappone a un altro
-periodo della famiglia nella stessa casa, o più lungo di 366 notti; arrivare il giorno
-in cui qualcuno parte è ammesso, come per gli ospiti. Se due persone modificano lo
-stesso periodo negli stessi istanti vale l'ultima scrittura.
+**Più famiglie nella stessa casa.** Due periodi possono condividere delle notti nella
+stessa casa: il modulo lo dice prima di salvare («In quelle date c'è anche…») e nel
+calendario le notti in comune sono una sola barra con entrambi i nomi. La pagina
+rifiuta invece un periodo che cade su notti con ospiti o più lungo di 366 notti;
+arrivare il giorno in cui qualcuno parte è ammesso, come per gli ospiti. Se due persone
+modificano lo stesso periodo negli stessi istanti vale l'ultima scrittura.
+
+**Avviso al proprietario.** Per non dover aprire la pagina per accorgersene, il job
+notturno tiene aperta una issue «Date da far bloccare al gestore», assegnata al
+proprietario del repository: GitHub gli scrive una mail. Succede quando un periodo
+entra in «Da far bloccare al gestore» o in «Ci sono ospiti in quelle date» (appena
+inserito, perché il gestore ha riaperto la vendita, o perché è arrivata una
+prenotazione); il lunedì arriva un promemoria finché restano periodi non bloccati che
+iniziano entro 90 giorni. Quando non resta nulla in sospeso il job chiude la issue. Il
+testo è generico, senza date né nomi, perché la issue è pubblica: il dettaglio è nella
+pagina. La issue la scrive GitHub Actions e non il proprietario, perché nessuno riceve
+notifiche di ciò che fa da sé.
 
 Le modifiche degli altri arrivano quando si riapre la pagina o si torna sulla scheda
 (e comunque entro un minuto e mezzo); il job notturno le consolida nella pagina.
@@ -210,6 +239,9 @@ marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
   password. «Blocca» la cancella. Non usarlo su dispositivi condivisi.
 - **Log pubblici.** Il repository è pubblico, quindi lo sono i log di Actions: il
   programma stampa solo l'esito per casa e il tipo di errore.
+- **Segnalazione al proprietario.** La issue «Date da far bloccare al gestore» è
+  pubblica e dice solo che c'è qualcosa da guardare. Il job la scrive con il token del
+  workflow, a cui per questo è concesso il permesso `issues: write`.
 
 Limiti da conoscere:
 
@@ -283,6 +315,8 @@ il problema.
 | `… le Issues sono disattivate in questo repository` | funzione Issues spenta | `Settings → General → Features → Issues` |
 | `FAMILY_LOG_TOKEN non è un token fine-grained` | inserito un token classico | ripetere il passo 6: il token deve iniziare con `github_pat_` |
 | `N voci del registro di famiglia non si aprono con la password attuale` | password di famiglia cambiata | impostare `OLD_FAMILY_PASSPHRASE` per un'esecuzione |
+| `FAMILY_GROUPS: …` | un nome ripetuto, troppo lungo, o più di 8 nomi | correggere il secret: la pagina usa intanto i nomi validi |
+| `avviso al proprietario non aggiornato (…)` | GitHub ha rifiutato la scrittura della segnalazione | controllare che il workflow abbia ancora `issues: write`; l'elenco nella pagina resta corretto |
 
 Quando il registro non si legge, la pagina viene pubblicata lo stesso con le voci già
 note e il job risulta fallito, così arriva la mail. Finché il token non funziona la
@@ -314,7 +348,8 @@ python -m casecal demo --out dist-demo
 
 Nella pagina di prova le modifiche a «Chi usa la casa» restano nel browser che le fa.
 
-Prova end-to-end in un browser vero, richiede Playwright con Chromium. Simula anche due
+Prova end-to-end in un browser vero, richiede Playwright con Chromium (la CI la esegue
+a ogni push, con la versione fissata in `.github/workflows/ci.yml`). Simula anche due
 dispositivi sullo stesso registro, con una finta API di GitHub, e rilegge quanto
 scritto con il codice del job notturno:
 
@@ -335,11 +370,13 @@ le variabili d'ambiente del passo 1).
 | `casecal/crypto.py` | derivazione delle chiavi e cifratura a due livelli |
 | `casecal/family.py` | voci della famiglia: validazione, eventi cifrati, ricostruzione dello stato |
 | `casecal/familylog.py` | registro di famiglia su GitHub: lettura notturna e impostazioni per la pagina |
+| `casecal/alerts.py` | segnalazione al proprietario delle date da far bloccare |
 | `casecal/sync.py` | orchestrazione notturna e recupero dell'ultimo stato valido |
 | `casecal/site.py` | assemblaggio della pagina unica e della sua CSP |
 | `casecal/web/` | la pagina: decifratura, logica del calendario, registro (`store.js`), interfaccia |
 | `tests/portal_html.py` | pagine sintetiche con la stessa struttura del portale |
-| `tests/github_fake.py` | controfigura dell'API di GitHub usata dal registro |
+| `tests/github_fake.py` | controfigura dell'API di GitHub usata dal registro e dalla segnalazione |
+| `tests/fixtures/entry_status.json` | casi su cui job notturno e pagina devono dare lo stesso stato a un periodo |
 
 Questo repository è pubblico: nei test non devono mai entrare pagine scaricate dai
 portali, nomi, indirizzi o importi veri.
@@ -347,7 +384,9 @@ portali, nomi, indirizzi o importi veri.
 ### Aggiungere una casa
 
 1. Un nuovo blocco `[[property]]` in `properties.toml` (`id`, `label`, `env`; facoltativi
-   `check_in` e `check_out` se gli orari differiscono da quelli generali).
+   `check_in` e `check_out` se gli orari differiscono da quelli generali, e
+   `unpaid_is_own_use = true` se il gestore registra i soggiorni propri come
+   prenotazioni a importo zero).
 2. I tre secret `<ENV>_KB_URL`, `<ENV>_KB_USER`, `<ENV>_KB_PASS`.
 3. Le stesse tre righe nel passo «Leggi i portali» di
    `.github/workflows/nightly.yml` (un test verifica che non manchino).

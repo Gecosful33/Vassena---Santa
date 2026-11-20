@@ -169,18 +169,24 @@ def _free_run(stays: list[Stay], after: date, nights: int, limit: date) -> date 
     return None
 
 
+DEMO_GROUPS = ["Famiglia Rossi", "Famiglia Bianchi"]
+
+
 def _demo_entries(today: date, sea_stays: list[Stay], lake_stays: list[Stay], end: date) -> list[FamilyEntry]:
-    """Invented family notes: one on dates already blocked on the portal, one on dates still for sale."""
+    """Invented family notes: two that share nights on dates the portal has blocked, one on dates still for sale."""
     stamp = "2026-01-01T09:00:00Z"
+    rossi, bianchi = DEMO_GROUPS
     entries = []
-    blocked = next((s for s in sea_stays if s.kind == CLOSED and s.start > today and s.nights >= 7), None)
-    if blocked:  # inside dates the portal already shows as blocked
+    blocked = next((s for s in sea_stays if s.kind == CLOSED and s.start > today and s.nights >= 10), None)
+    if blocked:  # inside dates the portal already shows as blocked; the second family joins for two nights
         entries.append(FamilyEntry("demo_blocked_1", "mare", blocked.start + _ONE_DAY, blocked.start + 6 * _ONE_DAY,
-                                   "Elvio e famiglia", "", "Elvio", stamp))
+                                   rossi, "", "Paolo", stamp))
+        entries.append(FamilyEntry("demo_shared_1", "mare", blocked.start + 4 * _ONE_DAY, blocked.start + 9 * _ONE_DAY,
+                                   bianchi, "arriviamo il mercoledì", "Giulia", stamp))
     free = _free_run(lake_stays, today + 15 * _ONE_DAY, 4, end)
-    if free:  # on dates still open for sale: someone has to block them
+    if free:  # on dates still open for sale: the manager has to block them
         entries.append(FamilyEntry("demo_pending_1", "lago", free, free + 4 * _ONE_DAY,
-                                   "Nonna Ada", "viene con le amiche", "Giulia", stamp))
+                                   bianchi, "con gli zii", "Giulia", stamp))
     return entries
 
 
@@ -235,6 +241,7 @@ def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant:
         note=None,
         demo=True,
         entries=entries,
+        groups=list(DEMO_GROUPS),
         # Edits made in the demo stay in the browser that made them.
         log={"kind": "local"},
     )
