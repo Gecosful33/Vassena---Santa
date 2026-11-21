@@ -26,7 +26,7 @@ FAMILY = "famiglia-di-prova-2026"   # the page's one passphrase
 OWNER = "proprieta-di-prova-2026"   # what used to open the figures, before the single access
 FAST = 100_000  # the smallest count open_envelope accepts; keeps the suite quick
 CALENDAR = {"title": "Calendario", "properties": [{"label": "Santa"}]}
-FIGURES = {"properties": [{"id": "santa", "kpis": [{"net_cents": 658404}]}]}
+FIGURES = {"properties": [{"id": "santa", "kpis": [{"net_cents": 123456}]}]}
 
 
 def envelope(**overrides):
@@ -138,7 +138,7 @@ def test_a_page_published_with_two_passphrases_is_still_read():
 
 def test_the_envelope_holds_no_plaintext():
     text = json.dumps(envelope())
-    for leaked in ("Santa", "Calendario", "658404", "kpis", FAMILY, OWNER):
+    for leaked in ("Santa", "Calendario", "123456", "kpis", FAMILY, OWNER):
         assert leaked not in text
     assert set(json.loads(text)) == {"v", "kdf", "family", "owner"}
 

@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+from . import r2
+from .alerts import needing_action, reconcile
 from .config import Config, PortalCredentials, PropertyConfig
+from .costs import CostSheet, CostsError, parse_workbook, sheets_from_payload
 from .crypto import EnvelopeError, build_envelope, derive_key, open_envelope, site_salt
 from .errors import PortalError, SyncAborted
 from .family import FamilyEntry, FamilyError, ordered
-from .alerts import needing_action, reconcile
 from .familylog import (
     DEFAULT_API,
     FamilyLogError,
@@ -49,6 +51,7 @@ class PreviousPage:
     properties: dict[str, PropertySnapshot] = field(default_factory=dict)
     entries: list[FamilyEntry] = field(default_factory=list)
     log: dict[str, Any] | None = None
+    costs: list[CostSheet] = field(default_factory=list)
 
 
 PreviousLoader = Callable[[], PreviousPage]
@@ -174,7 +177,12 @@ def previous_from_site(
         except FamilyError:
             continue
     log = family.get("log")
-    return PreviousPage(properties=properties, entries=entries, log=log if isinstance(log, dict) else None)
+    return PreviousPage(
+        properties=properties,
+        entries=entries,
+        log=log if isinstance(log, dict) else None,
+        costs=sheets_from_payload((owner or {}).get("costs")),
+    )
 
 
 def family_state(
@@ -220,6 +228,53 @@ def family_state(
         known_houses={prop.id for prop in config.properties},
         fallback=keep_published,
     )
+
+
+@dataclass
+class CostsState:
+    """The houses' running costs for the page, and what went wrong reading them."""
+
+    sheets: list[CostSheet]
+    warnings: list[str]
+    fresh: bool = False  # the owner's workbook was read in this run
+
+
+def costs_state(
+    config: Config,
+    *,
+    url: str | None,
+    key_id: str | None,
+    secret: str | None,
+    load_previous: PreviousLoader,
+    fetch: Callable[[str, str, str], bytes] | None = None,
+) -> CostsState:
+    """The cost sheets of the owner's workbook, fetched from its private bucket.
+
+    Without the three settings there is no profit and loss, and nothing to
+    report. With them, a workbook that cannot be fetched or trusted leaves the
+    costs already published in place and flags the run: a slip in a spreadsheet
+    must neither empty the page nor keep the calendar from being published.
+    """
+    given = [bool(url), bool(key_id), bool(secret)]
+    if not any(given):
+        return CostsState([], [])
+
+    def kept(reason: str) -> CostsState:
+        return CostsState(
+            list(load_previous().costs),
+            [f"spese non lette ({reason}): restano quelle già pubblicate"],
+        )
+
+    if not all(given):
+        return kept("servono tutti e tre i secret COSTS_R2_URL, COSTS_R2_ACCESS_KEY_ID e COSTS_R2_SECRET_ACCESS_KEY")
+    try:
+        data = (fetch or r2.fetch)(url, key_id, secret)
+        sheets, warnings = parse_workbook(data, [(prop.id, prop.label) for prop in config.properties])
+    except (r2.StorageError, CostsError) as exc:
+        return kept(str(exc))  # written to be public: no address, no key, nothing of the content
+    except Exception as exc:  # noqa: BLE001 - the calendar comes first
+        return kept(describe_error(exc))
+    return CostsState(sheets, warnings, fresh=True)
 
 
 def alert_owner(

@@ -203,7 +203,7 @@ def test_the_family_layer_travels_in_the_family_payload():
     plain = Snapshot(generated_at=NOW, properties=[snapshot()])
     assert plain.family_payload()["entries"] == [] and plain.family_payload()["log"] is None
     assert plain.family_payload()["groups"] == []
-    assert set(plain.owner_payload()) == {"v", "properties"}  # nothing of it in the owner tier
+    assert set(plain.owner_payload()) == {"v", "properties", "costs"}  # nothing of it with the figures
     named = Snapshot(generated_at=NOW, properties=[snapshot()], groups=["Famiglia Rossi", "Famiglia Bianchi"])
     assert named.family_payload()["groups"] == ["Famiglia Rossi", "Famiglia Bianchi"]
 

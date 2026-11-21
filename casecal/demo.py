@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from .costs import CostLine, CostSheet
 from .family import FamilyEntry
 from .model import (
     BOOKING,
@@ -189,6 +190,39 @@ def _demo_entries(today: date, sea_stays: list[Stay], lake_stays: list[Stay], en
     return entries
 
 
+# Invented running costs of the two houses, in euro a year: (name, sea house, lake house, remark).
+_DEMO_COSTS = (
+    ("TARI", 180, 540, ""),
+    ("IMU", 1450, 3900, "stima"),
+    ("Spese condominiali (solo Casa Mare)", 1100, None, ""),
+    ("Concessione del pontile (solo Casa Lago)", None, 1250, ""),
+    ("Bolletta luce", 520, 1650, "da rivedere con il nuovo contratto"),
+    ("Bolletta gas", 310, 280, ""),
+    ("Bolletta acqua", 95, 210, ""),
+    ("Internet", 190, 300, ""),
+    ("Giardiniere", 120, 2400, "preventivo da confermare"),
+    ("Assicurazione", 450, 640, ""),
+    ("Manutenzione ordinaria", 250, 900, "stima"),
+    ("Manutenzione straordinaria", 300, 1200, "stima"),
+)
+
+
+def _demo_costs(years: tuple[int, int]) -> list[CostSheet]:
+    """A cost sheet for each of the two years on show; the second foresees a dearer year."""
+    def sheet(year: int, percent: int, revised: date) -> CostSheet:
+        def cents(euro: int | None) -> int | None:
+            return None if euro is None else euro * percent
+        return CostSheet(
+            year=year,
+            updated=revised,
+            lines=tuple(
+                CostLine(label=name, amounts={"mare": cents(sea), "lago": cents(lake)}, note=note)
+                for name, sea, lake, note in _DEMO_COSTS
+            ),
+        )
+    return [sheet(years[0], 100, date(years[0], 9, 1)), sheet(years[1], 104, date(years[0], 11, 2))]
+
+
 def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant: str = "ok") -> Snapshot:
     """Two invented houses around ``now``.
 
@@ -243,4 +277,5 @@ def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant:
         groups=list(DEMO_GROUPS),
         # Edits made in the demo stay in the browser that made them.
         log={"kind": "local"},
+        costs=_demo_costs(years),
     )

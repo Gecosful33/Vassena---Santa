@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from .config import (
+    COSTS_SECRETS,
     DEFAULT_CONFIG,
     ConfigError,
     credentials_for,
@@ -19,7 +20,7 @@ from .config import (
 from .crypto import PassphraseError, check_passphrase, generate_passphrase
 from .errors import SyncAborted
 from .familylog import token_problem
-from .sync import PreviousPage, alert_owner, collect, family_state, previous_from_site, publish
+from .sync import PreviousPage, alert_owner, collect, costs_state, family_state, previous_from_site, publish
 
 EXIT_OK, EXIT_ABORTED, EXIT_CONFIG = 0, 1, 2
 # What was done with the owner's alert, for a log that is public: no counts, no dates.
@@ -78,6 +79,14 @@ def cmd_check(args: argparse.Namespace) -> int:
         _problem("warning", f"registro di famiglia non attivo: {token_problem(token)}")
     else:
         _say("registro di famiglia: attivo")
+    costs = [name for name in COSTS_SECRETS if os.environ.get(name, "").strip()]
+    if not costs:
+        _say("spese per il P&L: non configurate (COSTS_R2_URL assente), la pagina resta senza P&L")
+    elif len(costs) < len(COSTS_SECRETS):
+        missing = ", ".join(name for name in COSTS_SECRETS if name not in costs)
+        _problem("warning", f"spese per il P&L: configurazione incompleta, manca {missing}")
+    else:
+        _say("spese per il P&L: configurate")
     return EXIT_OK
 
 
@@ -122,6 +131,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
         report.warnings["registro"] = family_layer.warnings + group_problems
     if family_layer.log:
         _say("registro di famiglia: letto")
+    # The running costs, from the owner's workbook: optional, they turn on the profit and loss.
+    costs = costs_state(
+        config,
+        url=os.environ.get("COSTS_R2_URL", "").strip() or None,
+        key_id=os.environ.get("COSTS_R2_ACCESS_KEY_ID", "").strip() or None,
+        secret=os.environ.get("COSTS_R2_SECRET_ACCESS_KEY", "").strip() or None,
+        load_previous=load_previous,
+    )
+    snapshot.costs = costs.sheets
+    if costs.warnings:
+        report.warnings["spese"] = costs.warnings
+    if costs.fresh:
+        _say("spese: lette")
     # The owner's alert: written by the workflow's own token (ALERTS_TOKEN), so that
     # GitHub notifies the owner; a token of the owner's would write as the owner.
     alert, alert_problem = alert_owner(

@@ -13,14 +13,17 @@ from casecal.config import (
     load_config,
     missing_secrets,
 )
+from casecal.costs import CostLine, CostSheet
 from casecal.crypto import derive_key, open_envelope, site_salt
 from casecal.demo import DEMO_PASSPHRASE, demo_snapshot
 from casecal.errors import TransportError
 from casecal.family import encode_event
 from casecal.familylog import ISSUE_TITLE, GitHubLog
 from casecal.model import BOOKING, CLOSED, PropertySnapshot
+from casecal.r2 import StorageError
 from casecal.site import extract_envelope
 from github_fake import TOKEN, FakeGitHub
+from workbooks import workbook, year_rows
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -198,6 +201,28 @@ def test_check_says_whether_the_family_can_edit(monkeypatch, capsys):
     assert "fine-grained" in output and "ghp_classic0123456789" not in output
 
 
+# Where the owner's workbook of costs is kept, and the read-only key that fetches it.
+BUCKET_ENV = {
+    "COSTS_R2_URL": "https://acc0123.r2.cloudflarestorage.com/case-private/spese.xlsx",
+    "COSTS_R2_ACCESS_KEY_ID": "key-id-0123456789",
+    "COSTS_R2_SECRET_ACCESS_KEY": "key-secret-9876543210",
+}
+
+
+def test_check_says_whether_the_costs_behind_the_profit_and_loss_are_set_up(monkeypatch, capsys):
+    _, output = run_cli(monkeypatch, capsys, ["check"], GOOD_ENV)
+    assert "spese per il P&L: non configurate" in output
+    code, output = run_cli(monkeypatch, capsys, ["check"], {**GOOD_ENV, **BUCKET_ENV})
+    assert code == cli.EXIT_OK and "spese per il P&L: configurate" in output
+    for value in BUCKET_ENV.values():
+        assert value not in output
+    half = {**GOOD_ENV, "COSTS_R2_URL": BUCKET_ENV["COSTS_R2_URL"]}
+    code, output = run_cli(monkeypatch, capsys, ["check"], half)
+    assert code == cli.EXIT_OK  # the calendar itself is fine
+    assert "configurazione incompleta, manca COSTS_R2_ACCESS_KEY_ID, COSTS_R2_SECRET_ACCESS_KEY" in output
+    assert BUCKET_ENV["COSTS_R2_URL"] not in output
+
+
 def test_check_names_what_is_missing_without_printing_values(monkeypatch, capsys):
     env = {k: v for k, v in GOOD_ENV.items() if k != "VASSENA_KB_PASS"}
     code, output = run_cli(monkeypatch, capsys, ["check"], env)
@@ -326,6 +351,53 @@ def test_sync_reports_an_alert_that_could_not_be_written(monkeypatch, capsys, tm
     assert "avvisi: avviso al proprietario non aggiornato" in printed and "degraded=true" in outputs
 
 
+def published_figures(tmp_path):
+    page = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
+    return open_envelope(extract_envelope(page), passphrase=GOOD_ENV["FAMILY_PASSPHRASE"])[1]
+
+
+def test_sync_publishes_the_costs_it_reads_from_the_bucket(monkeypatch, capsys, tmp_path):
+    asked = []
+
+    def bucket(url, key_id, secret):
+        asked.append((url, key_id, secret))
+        return workbook({"2026": year_rows("Vassena", "Santa Margherita")})
+
+    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
+    assert asked == [tuple(BUCKET_ENV.values())]
+    assert "spese: lette" in printed and "degraded=false" in outputs
+    costs = published_figures(tmp_path)["costs"]
+    assert [sheet["year"] for sheet in costs] == [2026]
+    assert costs[0]["lines"][0] == {"label": "TARI", "amounts": {"vassena": 54000, "santa": 18000}, "note": "saldo a dicembre"}
+    for private in ("TARI", "saldo a dicembre", "540"):
+        assert private not in printed  # the workbook is private, the log is not
+
+
+def test_sync_without_the_settings_of_the_costs_publishes_no_profit_and_loss(monkeypatch, capsys, tmp_path):
+    def never(*settings):
+        raise AssertionError("the bucket must not be contacted in this scenario")
+
+    monkeypatch.setattr("casecal.r2.fetch", never)
+    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None)
+    assert published_figures(tmp_path)["costs"] == []
+    assert "spese" not in printed and "degraded=false" in outputs
+
+
+def test_sync_keeps_the_costs_already_published_when_the_bucket_cannot_be_read(monkeypatch, capsys, tmp_path):
+    online = CostSheet(year=2026, lines=(CostLine("IMU", {"santa": 145000, "vassena": 390050}, "stima"),))
+
+    def refused(url, key_id, secret):
+        raise StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
+
+    monkeypatch.setattr("casecal.r2.fetch", refused)
+    monkeypatch.setattr(cli, "previous_from_site", lambda site_url, **settings: sync.PreviousPage(costs=[online]))
+    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
+    assert published_figures(tmp_path)["costs"] == [online.to_dict()]
+    assert "spese: spese non lette (chiave rifiutata" in printed and "restano quelle già pubblicate" in printed
+    assert "degraded=true" in outputs  # the page is published, then the run asks for attention
+
+
 def test_sync_carries_the_entries_over_a_change_of_passphrase(monkeypatch, capsys, tmp_path):
     old = "vecchia-password-di-casa"
     github = FakeGitHub(issues=[{"number": 7, "title": ISSUE_TITLE}],
@@ -375,6 +447,12 @@ def test_demo_builds_an_openable_page(monkeypatch, capsys, tmp_path, variant):
     assert len(owner["properties"]) == 2
     assert family["log"] == {"kind": "local"}  # edits made in the demo stay in the browser
     assert family["groups"] == ["Famiglia Rossi", "Famiglia Bianchi"]
+    # The costs behind the profit and loss: this year's and next year's, for both houses.
+    year = datetime.now(timezone.utc).year
+    assert [sheet["year"] for sheet in owner["costs"]] in ([year, year + 1], [year + 1, year + 2])  # around midnight
+    for sheet in owner["costs"]:
+        assert len(sheet["lines"]) >= 10 and {"mare", "lago"} == set(sheet["lines"][0]["amounts"])
+        assert any(None in line["amounts"].values() for line in sheet["lines"])  # a cost of one house only
     # Also for a house that could not be read: the family's notes do not depend on the portal.
     assert sorted(entry["prop"] for entry in family["entries"]) == ["lago", "mare", "mare"]
 

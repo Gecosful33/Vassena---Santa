@@ -401,6 +401,8 @@ class Snapshot:
     log: dict[str, Any] | None = None
     # The families the entry form offers as fixed choices (empty: free text).
     groups: list[str] = field(default_factory=list)
+    # The houses' running costs, one sheet per year (see costs.py). Empty: no P&L.
+    costs: list[Any] = field(default_factory=list)
 
     def family_payload(self) -> dict[str, Any]:
         return {
@@ -420,6 +422,7 @@ class Snapshot:
         return {
             "v": PAYLOAD_VERSION,
             "properties": [prop.owner_dict() for prop in self.properties],
+            "costs": [sheet.to_dict() for sheet in self.costs],
         }
 
 

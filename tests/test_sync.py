@@ -4,13 +4,24 @@ from decimal import Decimal
 
 import pytest
 
-from casecal import sync
+from casecal import r2, sync
 from casecal.config import Config, PortalCredentials, PropertyConfig
+from casecal.costs import CostLine, CostSheet
 from casecal.crypto import AAD_OWNER, derive_key, encrypt_json, open_envelope
 from casecal.errors import LayoutError, LoginError, SyncAborted
 from casecal.model import MissingProperty, MonthKpi, PropertySnapshot, Reservation, Snapshot, Stay
 from casecal.site import extract_envelope
-from casecal.sync import PreviousPage, collect, describe_error, previous_from_site, publish, target_years
+from casecal.sync import (
+    CostsState,
+    PreviousPage,
+    collect,
+    costs_state,
+    describe_error,
+    previous_from_site,
+    publish,
+    target_years,
+)
+from workbooks import workbook, year_rows
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
 FAMILY = "nebbia-quercia-sentiero-42"  # the page's one passphrase
@@ -151,14 +162,14 @@ def test_nothing_is_published_when_every_portal_fails():
 
 def test_unexpected_errors_are_logged_without_their_message():
     def explode():
-        raise ValueError("could not parse amount 'EUR 6.584,04 Mario Rossi'")
+        raise ValueError("could not parse amount 'EUR 1.234,56 Mario Rossi'")
 
     try:
         explode()
     except ValueError as exc:
         line = describe_error(exc)
     assert line.startswith("ValueError")
-    assert "6.584" not in line and "Mario" not in line
+    assert "1.234" not in line and "Mario" not in line
     assert describe_error(LoginError("credenziali rifiutate")) == "LoginError: credenziali rifiutate"
 
 
@@ -245,3 +256,111 @@ def test_previous_data_is_ignored_when_it_cannot_be_trusted(tmp_path, monkeypatc
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: {"v": 99})
     assert previous_from_site("https://x.example", **args) == PreviousPage()  # garbage
+
+
+# --------------------------------------------------------------------------- the running costs
+
+COSTS = CostSheet(
+    year=2026,
+    lines=(CostLine("IMU", {"santa": 145000, "vassena": 390050}, "stima"), CostLine("Giardiniere", {"santa": None, "vassena": 240000})),
+    updated=date(2026, 9, 1),
+)
+BUCKET = dict(url="https://acc.r2.cloudflarestorage.com/case-private/spese.xlsx", key_id="key-id-0123", secret="key-secret-4567")
+
+
+def never_fetched(url, key_id, secret):
+    raise AssertionError("the bucket must not be contacted in this scenario")
+
+
+def published_with_costs() -> PreviousPage:
+    return PreviousPage(costs=[COSTS])
+
+
+def test_without_its_settings_there_is_no_profit_and_loss_and_nothing_to_report():
+    state = costs_state(CONFIG, url=None, key_id=None, secret=None, load_previous=no_previous, fetch=never_fetched)
+    assert state == CostsState([], [], fresh=False)
+
+
+def test_the_workbook_is_fetched_and_read_for_the_houses_of_the_calendar():
+    asked = []
+
+    def fetch(url, key_id, secret):
+        asked.append((url, key_id, secret))
+        # The owner heads the columns with the houses' full names.
+        return workbook({"2026": year_rows("Vassena", "Santa Margherita")})
+
+    state = costs_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
+    assert asked == [(BUCKET["url"], BUCKET["key_id"], BUCKET["secret"])]
+    assert state.fresh and state.warnings == []
+    assert [sheet.year for sheet in state.sheets] == [2026]
+    assert state.sheets[0].lines[0].amounts == {"vassena": 54000, "santa": 18000}
+    assert state.sheets[0].updated == date(2026, 9, 1)
+
+
+def test_an_oddity_in_the_workbook_flags_the_run_and_its_costs_are_used_all_the_same():
+    rows = year_rows("Vassena", "Santa")
+    rows[13] = ["Totale Spese", 1, 1, 2]  # the sheet's own total has drifted from its lines
+    state = costs_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=lambda *_: workbook({"2026": rows}))
+    assert state.fresh and state.sheets[0].total("santa") == 273000
+    assert state.warnings == ["foglio 2026: il totale delle spese scritto nel foglio non è la somma delle voci"]
+
+
+@pytest.mark.parametrize("missing", ["url", "key_id", "secret"])
+def test_an_incomplete_setting_keeps_the_costs_already_published(missing):
+    settings = {**BUCKET, missing: None}
+    state = costs_state(CONFIG, **settings, load_previous=published_with_costs, fetch=never_fetched)
+    assert state.sheets == [COSTS] and not state.fresh
+    assert len(state.warnings) == 1
+    for name in ("COSTS_R2_URL", "COSTS_R2_ACCESS_KEY_ID", "COSTS_R2_SECRET_ACCESS_KEY"):
+        assert name in state.warnings[0]
+    for value in BUCKET.values():
+        assert value not in state.warnings[0]
+
+
+def test_a_workbook_that_cannot_be_fetched_or_read_keeps_the_costs_already_published():
+    def refused(url, key_id, secret):
+        raise r2.StorageError("file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL")
+
+    def exploding(url, key_id, secret):
+        raise RuntimeError(f"unexpected, quoting {url} and {secret}")
+
+    for fetch, reason in (
+        (refused, "file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL"),
+        (lambda *_: b"not a workbook", "il file non è una cartella di lavoro Excel (.xlsx) leggibile"),
+        (lambda *_: workbook({"Spese": year_rows()}), "nessun foglio ha per nome un anno (per esempio «2026»)"),
+    ):
+        state = costs_state(CONFIG, **BUCKET, load_previous=published_with_costs, fetch=fetch)
+        assert state.sheets == [COSTS] and not state.fresh
+        assert state.warnings == [f"spese non lette ({reason}): restano quelle già pubblicate"]
+
+    # Whatever else goes wrong must not stop the calendar, nor reach the public log in full.
+    state = costs_state(CONFIG, **BUCKET, load_previous=published_with_costs, fetch=exploding)
+    assert state.sheets == [COSTS] and not state.fresh
+    assert state.warnings[0].startswith("spese non lette (RuntimeError (sync.py:")
+    for value in BUCKET.values():
+        assert value not in state.warnings[0]
+
+    # With nothing published yet there are no costs to keep: the page has no profit and loss.
+    state = costs_state(CONFIG, **BUCKET, load_previous=PreviousPage, fetch=refused)
+    assert state.sheets == [] and len(state.warnings) == 1
+
+
+def test_the_bucket_is_read_through_the_signed_fetch_unless_told_otherwise(monkeypatch):
+    asked = []
+    monkeypatch.setattr(r2, "fetch", lambda *settings: asked.append(settings) or workbook({"2026": year_rows("Vassena", "Santa")}))
+    state = costs_state(CONFIG, **BUCKET, load_previous=no_previous)
+    assert state.fresh and asked == [(BUCKET["url"], BUCKET["key_id"], BUCKET["secret"])]
+
+
+def test_the_costs_travel_with_the_figures_and_are_recovered_from_the_published_page(tmp_path, monkeypatch):
+    snapshot = Snapshot(generated_at=NOW, properties=[house("santa"), house("vassena")], costs=[COSTS])
+    envelope = _published_envelope(tmp_path, snapshot)
+    family, figures = open_envelope(envelope, passphrase=FAMILY)
+    assert figures["costs"] == [COSTS.to_dict()]
+    assert "costs" not in family and "IMU" not in str(family)  # nothing of them with the calendar
+    monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: envelope)
+    assert previous_from_site("https://x.example", passphrase=FAMILY).costs == [COSTS]
+    # A page published before the costs existed simply has none.
+    older = _published_envelope(tmp_path / "older", Snapshot(generated_at=NOW, properties=[house("santa")]))
+    monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: older)
+    assert previous_from_site("https://x.example", passphrase=FAMILY).costs == []
