@@ -143,9 +143,13 @@ def collect(
 
 
 def previous_from_site(
-    site_url: str | None, *, family_passphrase: str, owner_passphrase: str
+    site_url: str | None, *, passphrase: str, legacy_owner_passphrase: str | None = None
 ) -> PreviousPage:
-    """What the page currently online holds, or an empty page if it cannot be read back."""
+    """What the page currently online holds, or an empty page if it cannot be read back.
+
+    ``legacy_owner_passphrase`` opens the figures of a page published when they
+    had a passphrase of their own; without it such a page still gives its calendar.
+    """
     if not site_url:
         return PreviousPage()
     envelope = fetch_published_envelope(site_url)
@@ -153,7 +157,7 @@ def previous_from_site(
         return PreviousPage()
     try:
         family, owner = open_envelope(
-            envelope, family_passphrase=family_passphrase, owner_passphrase=owner_passphrase
+            envelope, passphrase=passphrase, legacy_owner_passphrase=legacy_owner_passphrase
         )
     except EnvelopeError:
         return PreviousPage()
@@ -270,24 +274,20 @@ def alert_owner(
 def publish(
     snapshot: Snapshot,
     *,
-    family_passphrase: str,
-    owner_passphrase: str,
+    passphrase: str,
     site_id: str,
     out_dir: str | Path,
 ) -> Path:
     family_payload = snapshot.family_payload()
     owner_payload = snapshot.owner_payload()
     envelope = build_envelope(
-        family_passphrase=family_passphrase,
-        owner_passphrase=owner_passphrase,
+        passphrase=passphrase,
         salt=site_salt(site_id),
         family_payload=family_payload,
         owner_payload=owner_payload,
     )
-    # Never publish a page that its own passphrases cannot open.
-    family, owner = open_envelope(
-        envelope, family_passphrase=family_passphrase, owner_passphrase=owner_passphrase
-    )
-    if family != family_payload or owner is None or owner.get("properties") != owner_payload["properties"]:
+    # Never publish a page that its own passphrase cannot open.
+    family, owner = open_envelope(envelope, passphrase=passphrase)
+    if family != family_payload or owner != owner_payload:
         raise SiteError("envelope self-check failed")
     return write_site(out_dir, render_page(envelope, title=snapshot.title))

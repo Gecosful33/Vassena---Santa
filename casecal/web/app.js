@@ -18,7 +18,9 @@
 
   function blankState() {
     return {
-      family: null, owner: null, props: [], today: 0, filter: "all", year: null,
+      // `family` is the calendar, `owner` the figures: both open with the one password.
+      // `house` is the house on show: the page deals with one at a time.
+      family: null, owner: null, props: [], today: 0, house: null, year: null,
       showPast: false, pastStays: {}, allGuests: {}, remembered: false,
       // The family's own entries: the current map, where changes are written (null =
       // read-only page), how far the log has been read, and the key that opens it.
@@ -165,7 +167,7 @@
     var submit = el("button", { class: "btn primary", type: "submit", text: "Apri il calendario" });
     var form = el("form", { class: "lock-card", novalidate: true },
       el("h1", { text: genericTitle }),
-      el("p", { text: notice || "Inserisci la password di famiglia." }),
+      el("p", { text: notice || "Inserisci la password del calendario." }),
       field.node,
       el("label", { class: "check" }, remember, "Ricorda su questo dispositivo"),
       error, submit);
@@ -181,11 +183,9 @@
       }).then(function (opened) {
         if (!opened) throw new Error("Password non corretta.");
         if (remember.checked) {
-          saveKeys({
-            salt: envelope.kdf.salt,
-            family: C.bytesToB64(opened.familyKey),
-            owner: opened.ownerKey ? C.bytesToB64(opened.ownerKey) : null
-          });
+          // Kept under the name it had when the figures had a password of their own:
+          // a device that remembered the calendar's key then still opens the page now.
+          saveKeys({ salt: envelope.kdf.salt, family: C.bytesToB64(opened.key) });
         } else {
           clearKeys();
         }
@@ -225,9 +225,13 @@
     });
     state.today = L.todayInZone(opened.family.tz, Date.now());
     document.title = opened.family.title || genericTitle;
+    // The house this device looked at last, or the first one.
+    var last = lastHouse();
+    state.house = state.props.some(function (prop) { return prop.id === last; }) ? last
+      : (state.props.length ? state.props[0].id : null);
 
     // What the nightly build already knew, then whatever has been written since.
-    state.familyKey = opened.familyKey;
+    state.familyKey = opened.key;
     state.entries = L.foldEvents((opened.family.entries || []).map(function (raw) {
       return Object.assign({ t: "set" }, raw);
     }), {});
@@ -340,8 +344,9 @@
 
   /* ---------- shared pieces ---------- */
 
+  /** The house on show (a list, because the sections are written for any number of houses). */
   function visible() {
-    return state.props.filter(function (prop) { return state.filter === "all" || prop.id === state.filter; });
+    return state.props.filter(function (prop) { return prop.id === state.house; });
   }
   function readable() { return visible().filter(function (prop) { return !prop.missing; }); }
 
@@ -403,7 +408,7 @@
    * says whether its nights are really blocked there.
    */
 
-  var ME = "casecal.me", MINE = "casecal.family";
+  var ME = "casecal.me", MINE = "casecal.family", HOUSE = "casecal.house";
   var STORE_MESSAGES = {
     offline: "Connessione assente: le modifiche non si possono leggere né salvare.",
     token: "Il token del registro di famiglia è scaduto o è stato revocato: finché non viene rinnovato le modifiche non sono disponibili.",
@@ -419,6 +424,9 @@
   // The family this device last wrote a period for: the next one starts from there.
   function myFamily() { try { return localStorage.getItem(MINE) || ""; } catch (err) { return ""; } }
   function rememberFamily(name) { try { localStorage.setItem(MINE, name); } catch (err) { /* private mode */ } }
+  // The house this device looked at last: the page opens on it.
+  function lastHouse() { try { return localStorage.getItem(HOUSE) || ""; } catch (err) { return ""; } }
+  function rememberHouse(id) { try { localStorage.setItem(HOUSE, id); } catch (err) { /* private mode */ } }
 
   function familyView() {
     return JSON.stringify(L.entriesOf(state.entries).map(L.entryRecord)) + state.sync.phase + state.sync.code;
@@ -884,13 +892,15 @@
     return out;
   }
 
-  function filterBar() {
+  /** One tab per house: everything below shows the house chosen here. */
+  function houseTabs() {
     if (state.props.length < 2) return null;
-    var options = [{ id: "all", label: "Tutte" }].concat(state.props.map(function (prop) {
+    var options = state.props.map(function (prop) {
       return { id: prop.id, label: prop.label, index: prop.index };
-    }));
-    return el("div", null, segmented("filter", "Case da mostrare", options, state.filter, function (id, key) {
-      state.filter = id;
+    });
+    return el("div", null, segmented("house", "Casa", options, state.house, function (id, key) {
+      state.house = id;
+      rememberHouse(id);
       render(key);
     }));
   }
@@ -1263,46 +1273,6 @@
 
   /* ---------- owner area ---------- */
 
-  function ownerLock() {
-    var field = passwordField("owner-pw", "Password proprietà", "off");
-    var remember = el("input", { type: "checkbox" });
-    var error = el("p", { class: "error", role: "alert", hidden: true });
-    var submit = el("button", { class: "btn primary", type: "submit", text: "Sblocca" });
-    var form = el("form", { class: "owner-lock", novalidate: true },
-      el("p", { class: "hint", text: "Ricavi e indicatori economici: serve la seconda password." }),
-      field.node, el("label", { class: "check" }, remember, "Ricorda su questo dispositivo"), error, submit);
-    form.addEventListener("submit", function (event) {
-      event.preventDefault();
-      if (!field.input.value.trim()) { showError(error, "Scrivi la password."); return; }
-      submit.disabled = true;
-      submit.textContent = "Verifica in corso…";
-      showError(error, "");
-      var derived;
-      C.deriveKey(field.input.value, envelope.kdf).then(function (key) {
-        derived = key;
-        return C.unlockOwner(envelope, key);
-      }).then(function (owner) {
-        if (!owner) throw new Error("Password non corretta.");
-        state.owner = owner;
-        if (remember.checked) {
-          var keys = loadKeys();
-          if (!keys || keys.salt !== envelope.kdf.salt) {
-            keys = { salt: envelope.kdf.salt, family: owner.family_key };
-          }
-          keys.owner = C.bytesToB64(derived);
-          saveKeys(keys);
-        }
-        render("owner-close");
-      }).catch(function (err) {
-        submit.disabled = false;
-        submit.textContent = "Sblocca";
-        showError(error, err && err.message ? err.message : "Impossibile sbloccare.");
-        field.input.select();
-      });
-    });
-    return form;
-  }
-
   function tile(label, value, note) {
     return el("div", { class: "tile" }, el("div", { class: "label", text: label }),
       el("div", { class: "value", text: value }), note ? el("div", { class: "note", text: note }) : null);
@@ -1431,12 +1401,10 @@
     ];
   }
 
+  /** The figures of the house on show, and the nights still to be blocked for the family. */
   function ownerSection() {
+    if (!state.owner) return null; // the figures did not open: the calendar is shown without them
     var section = el("section", { class: "card" });
-    if (!state.owner) {
-      append(section, [el("div", { class: "section-head" }, el("h2", { text: "Area proprietà" })), ownerLock()]);
-      return section;
-    }
     var byId = {};
     state.owner.properties.forEach(function (raw) { byId[raw.id] = raw; });
     var scoped = readable().filter(function (prop) { return byId[prop.id] && !byId[prop.id].missing; });
@@ -1448,19 +1416,10 @@
     append(section, el("div", { class: "section-head" },
       el("h2", { text: "Area proprietà" }),
       years.length > 1 ? segmented("year", "Anno", years.map(function (y) { return { id: y, label: String(y) }; }), year,
-        function (id, key) { state.year = id; render(key); }) : null,
-      el("button", {
-        class: "btn quiet", type: "button", "data-key": "owner-close", text: "Chiudi area",
-        onclick: function () {
-          state.owner = null;
-          var keys = loadKeys();
-          if (keys && keys.owner) { keys.owner = null; saveKeys(keys); }
-          render();
-        }
-      })));
+        function (id, key) { state.year = id; render(key); }) : null));
     append(section, closingList(scoped, byId));
     if (!years.length) {
-      append(section, el("p", { class: "empty", text: "Nessun dato economico disponibile per le case selezionate." }));
+      append(section, el("p", { class: "empty", text: "Nessun dato economico disponibile per questa casa." }));
       return section;
     }
     var series = scoped.map(function (prop) {
@@ -1501,7 +1460,7 @@
     hideTip();
     clear(root);
     root.appendChild(el("div", { class: "shell" },
-      header(), banners(), filterBar(), availability(), calendar(), familySection(), staysSection(), ownerSection(), footer()));
+      header(), banners(), houseTabs(), availability(), calendar(), familySection(), staysSection(), ownerSection(), footer()));
     window.scrollTo(0, scroll);
     fitLabels();
     // Not while a sheet is open: the focus belongs inside it, and it will ask for it back.
@@ -1530,22 +1489,21 @@
   function boot() {
     state = blankState();
     var keys = loadKeys();
-    if (!keys || keys.salt !== envelope.kdf.salt || !(keys.owner || keys.family)) {
+    if (!keys || keys.salt !== envelope.kdf.salt || !keys.family) {
       if (keys) clearKeys();
       renderLock();
       return;
     }
-    var attempts = [keys.owner, keys.family].filter(Boolean);
-    (function next() {
-      if (!attempts.length) {
-        clearKeys();
-        renderLock("La password è cambiata: inseriscila di nuovo.");
-        return;
-      }
-      C.unlock(envelope, C.b64ToBytes(attempts.shift())).then(function (opened) {
-        if (opened) enter(opened, true); else next();
-      }).catch(next);
-    })();
+    function changed() {
+      clearKeys();
+      renderLock("La password è cambiata: inseriscila di nuovo.");
+    }
+    // A key remembered for the figures alone, from when they had their own password, opens
+    // nothing any more: it is not kept.
+    if (keys.owner) saveKeys({ salt: keys.salt, family: keys.family });
+    C.unlock(envelope, C.b64ToBytes(keys.family)).then(function (opened) {
+      if (opened) enter(opened, true); else changed();
+    }).catch(changed);
   }
 
   boot();

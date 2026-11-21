@@ -395,7 +395,6 @@ button, input { font: inherit; color: inherit; }
 .stays h3 .swatch { width: 12px; height: 12px; border-radius: 4px; }
 
 /* ---------- owner area ---------- */
-.owner-lock { display: grid; gap: 12px; max-width: 420px; }
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 4px; }
 @media (min-width: 600px) { .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (min-width: 1000px) { .tiles { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
@@ -442,7 +441,7 @@ button, input { font: inherit; color: inherit; }
   .day.today .n { outline: 2px solid CanvasText; }
 }
 @media print {
-  .btn, .seg, .owner-lock, .tip { display: none !important; }
+  .btn, .seg, .tip { display: none !important; }
   .card { border: 0; padding: 0; }
   body { background: #fff; }
 }

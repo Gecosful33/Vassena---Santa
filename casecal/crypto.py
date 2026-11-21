@@ -1,10 +1,13 @@
-"""Two-tier envelope encryption for a page served from a public host.
+"""Envelope encryption for a page served from a public host.
 
-The published HTML only ever contains ciphertext. Two passphrases unlock it:
+The published HTML only ever contains ciphertext. One passphrase unlocks it:
+whoever has it sees the calendar and the figures alike.
 
-* the *family* passphrase decrypts the availability calendar;
-* the *owner* passphrase decrypts the economics and, because the owner blob
-  carries the family key, the calendar as well.
+The page carries two blobs, the calendar ("family") and the figures ("owner"),
+under the same key and told apart by their associated data. They used to open
+with two different passphrases; ``open_envelope`` can still read a page
+published that way, which is what the nightly job finds online the first time
+it runs after the change.
 
 Keys come from PBKDF2-HMAC-SHA256 and blobs are AES-256-GCM, both of which the
 browser reproduces natively through WebCrypto (see ``web/crypto.js``).
@@ -91,29 +94,24 @@ def decrypt_json(key: bytes, blob: Mapping[str, str], *, aad: str) -> Any:
     return json.loads(plaintext.decode("utf-8"))
 
 
-def check_passphrases(family: str, owner: str, *, forbidden: Iterable[str] = ()) -> None:
-    """Refuse passphrases an offline dictionary attack would find.
+def check_passphrase(passphrase: str, *, forbidden: Iterable[str] = (), name: str = "FAMILY_PASSPHRASE") -> None:
+    """Refuse a passphrase an offline dictionary attack would find.
 
     The ciphertext is public, so an attacker can test guesses offline at the
     speed of their hardware: length is the only real defence.
     """
     banned = {normalize_passphrase(item).casefold() for item in forbidden if item}
-    normalised = {}
-    for name, value in (("FAMILY_PASSPHRASE", family), ("OWNER_PASSPHRASE", owner)):
-        text = normalize_passphrase(value or "")
-        if len(text) < MIN_PASSPHRASE_LENGTH:
-            raise PassphraseError(
-                f"{name}: servono almeno {MIN_PASSPHRASE_LENGTH} caratteri "
-                "(generane una con `python -m casecal passphrase`)"
-            )
-        if len(set(text)) < MIN_DISTINCT_CHARACTERS:
-            raise PassphraseError(f"{name}: troppo ripetitiva, usa caratteri più vari")
-        folded = text.casefold()
-        if any(item and (item == folded or (len(item) >= 6 and item in folded)) for item in banned):
-            raise PassphraseError(f"{name}: non può coincidere con le credenziali dei portali")
-        normalised[name] = text
-    if normalised["FAMILY_PASSPHRASE"] == normalised["OWNER_PASSPHRASE"]:
-        raise PassphraseError("FAMILY_PASSPHRASE e OWNER_PASSPHRASE devono essere diverse")
+    text = normalize_passphrase(passphrase or "")
+    if len(text) < MIN_PASSPHRASE_LENGTH:
+        raise PassphraseError(
+            f"{name}: servono almeno {MIN_PASSPHRASE_LENGTH} caratteri "
+            "(generane una con `python -m casecal passphrase`)"
+        )
+    if len(set(text)) < MIN_DISTINCT_CHARACTERS:
+        raise PassphraseError(f"{name}: troppo ripetitiva, usa caratteri più vari")
+    folded = text.casefold()
+    if any(item and (item == folded or (len(item) >= 6 and item in folded)) for item in banned):
+        raise PassphraseError(f"{name}: non può coincidere con le credenziali dei portali")
 
 
 def generate_passphrase(groups: int = 5, group_length: int = 4) -> str:
@@ -126,17 +124,13 @@ def generate_passphrase(groups: int = 5, group_length: int = 4) -> str:
 
 def build_envelope(
     *,
-    family_passphrase: str,
-    owner_passphrase: str,
+    passphrase: str,
     salt: bytes,
     family_payload: Mapping[str, Any],
     owner_payload: Mapping[str, Any],
     iterations: int = KDF_ITERATIONS,
 ) -> dict[str, Any]:
-    family_key = derive_key(family_passphrase, salt, iterations)
-    owner_key = derive_key(owner_passphrase, salt, iterations)
-    owner_plain = dict(owner_payload)
-    owner_plain["family_key"] = _b64(family_key)
+    key = derive_key(passphrase, salt, iterations)
     return {
         "v": ENVELOPE_VERSION,
         "kdf": {
@@ -145,21 +139,22 @@ def build_envelope(
             "iterations": iterations,
             "salt": _b64(salt),
         },
-        "family": encrypt_json(family_key, family_payload, aad=AAD_FAMILY),
-        "owner": encrypt_json(owner_key, owner_plain, aad=AAD_OWNER),
+        "family": encrypt_json(key, family_payload, aad=AAD_FAMILY),
+        "owner": encrypt_json(key, owner_payload, aad=AAD_OWNER),
     }
 
 
 def open_envelope(
     envelope: Mapping[str, Any],
     *,
-    family_passphrase: str | None = None,
-    owner_passphrase: str | None = None,
+    passphrase: str,
+    legacy_owner_passphrase: str | None = None,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    """Decrypt whatever the given passphrases unlock.
+    """Decrypt what the passphrase unlocks.
 
-    Returns ``(family_payload, owner_payload)``; a tier whose passphrase is
-    missing or wrong comes back as ``None``.
+    Returns ``(family_payload, owner_payload)``; a blob the passphrase does not
+    open comes back as ``None``. ``legacy_owner_passphrase`` is tried on the
+    figures of a page published when they had a passphrase of their own.
     """
     try:
         if envelope["v"] != ENVELOPE_VERSION:
@@ -175,25 +170,17 @@ def open_envelope(
     if not 100_000 <= iterations <= 5_000_000:
         raise EnvelopeError("implausible iteration count")
 
-    family: dict[str, Any] | None = None
-    owner: dict[str, Any] | None = None
-    if owner_passphrase:
+    def opened(key: bytes, blob: Mapping[str, str], aad: str) -> dict[str, Any] | None:
         try:
-            owner = decrypt_json(
-                derive_key(owner_passphrase, salt, iterations), owner_blob, aad=AAD_OWNER
-            )
+            return decrypt_json(key, blob, aad=aad)
         except InvalidTag:
-            owner = None
-    if family_passphrase:
-        try:
-            family = decrypt_json(
-                derive_key(family_passphrase, salt, iterations), family_blob, aad=AAD_FAMILY
-            )
-        except InvalidTag:
-            family = None
-    if family is None and owner is not None:
-        try:
-            family = decrypt_json(_unb64(owner["family_key"]), family_blob, aad=AAD_FAMILY)
-        except (InvalidTag, KeyError, ValueError):
-            family = None
+            return None
+
+    family = owner = None
+    if passphrase:
+        key = derive_key(passphrase, salt, iterations)  # derived once: it is the slow part
+        family = opened(key, family_blob, AAD_FAMILY)
+        owner = opened(key, owner_blob, AAD_OWNER)
+    if owner is None and legacy_owner_passphrase:
+        owner = opened(derive_key(legacy_owner_passphrase, salt, iterations), owner_blob, AAD_OWNER)
     return family, owner

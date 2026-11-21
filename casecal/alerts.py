@@ -36,7 +36,7 @@ NEEDS_ACTION = (PENDING, CONFLICT)
 
 NOTHING, OPEN, NEW, REMIND, CLOSE = "nothing", "open", "new", "remind", "close"
 
-_WHERE = "Apri il calendario, sblocca l'area proprietà e guarda l'elenco «Da far bloccare al gestore»."
+_WHERE = "Apri il calendario e, per ciascuna casa, guarda nell'area proprietà l'elenco «Da far bloccare al gestore»."
 ISSUE_BODY = (
     "Nel calendario ci sono periodi segnati dalla famiglia su date che il gestore non ha ancora "
     "bloccato, oppure su cui nel frattempo sono arrivate prenotazioni di ospiti.\n\n"

@@ -12,7 +12,7 @@ from casecal.crypto import (
     EnvelopeError,
     PassphraseError,
     build_envelope,
-    check_passphrases,
+    check_passphrase,
     decrypt_json,
     derive_key,
     encrypt_json,
@@ -22,22 +22,36 @@ from casecal.crypto import (
     site_salt,
 )
 
-FAMILY = "famiglia-di-prova-2026"
-OWNER = "proprieta-di-prova-2026"
+FAMILY = "famiglia-di-prova-2026"   # the page's one passphrase
+OWNER = "proprieta-di-prova-2026"   # what used to open the figures, before the single access
 FAST = 100_000  # the smallest count open_envelope accepts; keeps the suite quick
+CALENDAR = {"title": "Calendario", "properties": [{"label": "Santa"}]}
+FIGURES = {"properties": [{"id": "santa", "kpis": [{"net_cents": 658404}]}]}
 
 
 def envelope(**overrides):
     values = dict(
-        family_passphrase=FAMILY,
-        owner_passphrase=OWNER,
+        passphrase=FAMILY,
         salt=site_salt("test-site"),
-        family_payload={"title": "Calendario", "properties": [{"label": "Santa"}]},
-        owner_payload={"properties": [{"id": "santa", "kpis": [{"net_cents": 658404}]}]},
+        family_payload=CALENDAR,
+        owner_payload=FIGURES,
         iterations=FAST,
     )
     values.update(overrides)
     return build_envelope(**values)
+
+
+def two_passphrase_envelope():
+    """A page as it was published when the figures had a passphrase of their own."""
+    salt = site_salt("test-site")
+    family_key, owner_key = derive_key(FAMILY, salt, FAST), derive_key(OWNER, salt, FAST)
+    figures = {**FIGURES, "family_key": base64.b64encode(family_key).decode()}
+    return {
+        "v": 1,
+        "kdf": {"name": "PBKDF2", "hash": "SHA-256", "iterations": FAST, "salt": base64.b64encode(salt).decode()},
+        "family": encrypt_json(family_key, CALENDAR, aad=AAD_FAMILY),
+        "owner": encrypt_json(owner_key, figures, aad=AAD_OWNER),
+    }
 
 
 def test_key_derivation_is_plain_pbkdf2_hmac_sha256():
@@ -90,24 +104,36 @@ def test_every_encryption_uses_a_fresh_nonce():
     assert first["ct"] != second["ct"]
 
 
-def test_the_family_passphrase_opens_only_the_calendar():
-    family, owner = open_envelope(envelope(), family_passphrase=FAMILY)
-    assert family["properties"] == [{"label": "Santa"}]
-    assert owner is None
-    # ... and it is useless against the owner blob.
-    family, owner = open_envelope(envelope(), owner_passphrase=FAMILY)
-    assert (family, owner) == (None, None)
+def test_one_passphrase_opens_the_calendar_and_the_figures():
+    family, owner = open_envelope(envelope(), passphrase=FAMILY)
+    assert family == CALENDAR
+    assert owner == FIGURES
 
 
-def test_the_owner_passphrase_opens_both_tiers():
-    family, owner = open_envelope(envelope(), owner_passphrase=OWNER)
-    assert family["title"] == "Calendario"
-    assert owner["properties"][0]["kpis"] == [{"net_cents": 658404}]
+def test_a_wrong_passphrase_opens_nothing():
+    assert open_envelope(envelope(), passphrase="x" * 20) == (None, None)
+    assert open_envelope(envelope(), passphrase="") == (None, None)
+    # What once opened the figures alone is no key to a page of today.
+    assert open_envelope(envelope(), passphrase=OWNER) == (None, None)
 
 
-def test_wrong_passphrases_open_nothing():
-    assert open_envelope(envelope(), family_passphrase="x" * 20, owner_passphrase="y" * 20) == (None, None)
-    assert open_envelope(envelope()) == (None, None)
+def test_the_two_blobs_cannot_be_swapped():
+    good = envelope()
+    swapped = {**good, "family": good["owner"], "owner": good["family"]}
+    assert open_envelope(swapped, passphrase=FAMILY) == (None, None)
+
+
+def test_a_page_published_with_two_passphrases_is_still_read():
+    # The nightly job finds such a page online the first time it runs after the change.
+    old = two_passphrase_envelope()
+    family, owner = open_envelope(old, passphrase=FAMILY)
+    assert family == CALENDAR
+    assert owner is None  # the figures had their own passphrase
+    family, owner = open_envelope(old, passphrase=FAMILY, legacy_owner_passphrase=OWNER)
+    assert family == CALENDAR
+    assert owner["properties"] == FIGURES["properties"]
+    # The old second passphrase is never tried on the calendar.
+    assert open_envelope(old, passphrase="x" * 20, legacy_owner_passphrase=OWNER)[0] is None
 
 
 def test_the_envelope_holds_no_plaintext():
@@ -129,32 +155,31 @@ def test_malformed_envelopes_are_refused():
         {k: v for k, v in good.items() if k != "owner"},
     ):
         with pytest.raises(EnvelopeError):
-            open_envelope(broken, family_passphrase=FAMILY)
+            open_envelope(broken, passphrase=FAMILY)
 
 
 def test_weak_passphrases_are_rejected():
-    strong_a, strong_b = "nebbia-quercia-sentiero-42", "lanterna-golfo-ardesia-17"
-    check_passphrases(strong_a, strong_b, forbidden=["utente", "Segreta1!"])
+    strong = "nebbia-quercia-sentiero-42"
+    check_passphrase(strong, forbidden=["utente", "Segreta1!"])
     with pytest.raises(PassphraseError, match="FAMILY_PASSPHRASE"):
-        check_passphrases("corta", strong_b)
-    with pytest.raises(PassphraseError, match="OWNER_PASSPHRASE"):
-        check_passphrases(strong_a, "aaaaaaaaaaaaaaaaaaaa")
-    with pytest.raises(PassphraseError, match="diverse"):
-        check_passphrases(strong_a, " " + strong_a + " ")
+        check_passphrase("corta")
+    with pytest.raises(PassphraseError, match="ripetitiva"):
+        check_passphrase("aaaaaaaaaaaaaaaaaaaa")
     with pytest.raises(PassphraseError, match="credenziali"):
-        check_passphrases("la-mia-Segreta1!-di-casa", strong_b, forbidden=["utente", "Segreta1!"])
+        check_passphrase("la-mia-Segreta1!-di-casa", forbidden=["utente", "Segreta1!"])
     with pytest.raises(PassphraseError):
-        check_passphrases("", strong_b)
+        check_passphrase("")
 
 
 def test_error_messages_never_echo_the_passphrase():
     with pytest.raises(PassphraseError) as caught:
-        check_passphrases("segretissima", "lanterna-golfo-ardesia-17")
+        check_passphrase("segretissima")
     assert "segretissima" not in str(caught.value)
 
 
 def test_generated_passphrases_pass_the_policy_and_differ():
     first, second = generate_passphrase(), generate_passphrase()
     assert first != second
-    check_passphrases(first, second)
+    check_passphrase(first)
+    check_passphrase(second)
     assert len(first.replace("-", "")) == 20

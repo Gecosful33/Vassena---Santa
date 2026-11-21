@@ -23,8 +23,7 @@ const { chromium, devices } = require("playwright");
 const ROOT = path.resolve(__dirname, "..", "..");
 const siteDir = path.resolve(process.argv[2] || "dist-demo");
 const shotDir = process.argv[3] ? path.resolve(process.argv[3]) : null;
-const FAMILY = process.env.E2E_FAMILY || "demo-famiglia-calendario";
-const OWNER = process.env.E2E_OWNER || "demo-proprieta-calendario";
+const PASSWORD = process.env.E2E_PASSWORD || "demo-calendario-delle-case"; // one password opens everything
 const SCALE = Number(process.env.E2E_SCALE || 1);
 const API = "https://api.github.com";
 const LOG_PATH = "/repos/owner/repo/issues/7/comments";
@@ -34,21 +33,20 @@ const TOKEN = "github_pat_E2E";
 const BUILD_LOG_PAGE = `
 import sys
 from datetime import datetime, timezone
-from casecal.demo import DEMO_FAMILY_PASSPHRASE, DEMO_OWNER_PASSPHRASE, demo_snapshot
+from casecal.demo import DEMO_PASSPHRASE, demo_snapshot
 from casecal.sync import publish
 snapshot = demo_snapshot(datetime.now(timezone.utc).replace(microsecond=0))
 snapshot.log = {"kind": "github", "api": "${API}", "repo": "owner/repo", "issue": 7,
                 "token": "${TOKEN}", "cursor": 1000, "since": "2026-01-01T00:00:00Z"}
-publish(snapshot, family_passphrase=DEMO_FAMILY_PASSPHRASE, owner_passphrase=DEMO_OWNER_PASSPHRASE,
-        site_id="casecal-demo", out_dir=sys.argv[1])
+publish(snapshot, passphrase=DEMO_PASSPHRASE, site_id="casecal-demo", out_dir=sys.argv[1])
 `;
 /* What the nightly job would make of the comments the page wrote. */
 const READ_LOG_BACK = `
 import json, sys
 from casecal.crypto import derive_key, site_salt
-from casecal.demo import DEMO_FAMILY_PASSPHRASE
+from casecal.demo import DEMO_PASSPHRASE
 from casecal.family import decode_event, fold
-key = derive_key(DEMO_FAMILY_PASSPHRASE, site_salt("casecal-demo"))
+key = derive_key(DEMO_PASSPHRASE, site_salt("casecal-demo"))
 events = [decode_event(key, comment["body"]) for comment in json.load(open(sys.argv[1], encoding="utf-8"))]
 assert all(events), "a comment written by the page did not open with the family key"
 entries = sorted(fold(events).values(), key=lambda entry: entry.who)
@@ -150,7 +148,7 @@ async function main() {
    * The calendar's promise: every bar starts at the check-in hour of its first day and
    * ends at the check-out hour of its last one. Checked against the real layout.
    */
-  async function barsFollowTheHouseHours(page) {
+  async function barsFollowTheHouseHours(page, needs = {}) {
     const report = await page.evaluate(() => {
       const IN = 15 / 24, OUT = 11 / 24;
       const result = { starts: 0, ends: 0, worst: 0, clipped: [], turnovers: 0, joins: 0, apart: [] };
@@ -207,7 +205,7 @@ async function main() {
       return result;
     });
     assert.ok(report.starts > 5 && report.ends > 5, "bars with real starts and ends were measured");
-    assert.ok(report.turnovers > 0, "the demo contains a same-day turnover");
+    if (needs.turnover !== false) assert.ok(report.turnovers > 0, "the demo contains a same-day turnover");
     assert.ok(report.worst < 1, `a bar is ${report.worst.toFixed(2)}px away from its hour`);
     assert.deepEqual(report.clipped, [], "labels that do not fit must not be drawn");
     assert.deepEqual(report.apart, [], "stretches of a shared stay must touch");
@@ -271,6 +269,17 @@ async function main() {
     assert.deepEqual(report, { sideways: 0, out: [], inView: true }, "the sheet does not hold its content");
   }
 
+  /** The page shows one house at a time: go to another one the way this device does. */
+  async function showHouse(page, label) {
+    await press(page, page.locator(".seg label", { hasText: new RegExp("^" + label + "$") }));
+    await page.waitForFunction((wanted) => {
+      const heading = document.querySelector(".house h3");
+      return heading && heading.textContent === wanted;
+    }, label);
+  }
+  const houseShown = (page) => page.locator(".house h3").innerText();
+  const figures = (page) => page.locator("section.card", { hasText: "Area proprietà" });
+
   /* ---- helpers for the family's entries ---- */
   const names = (page) => page.locator(".people .entry-who strong").allTextContents();
   const sorted = (list) => [...list].sort();
@@ -324,10 +333,11 @@ async function main() {
   const comeBack = (page) => page.evaluate(() => { document.dispatchEvent(new Event("visibilitychange")); });
   const syncText = (page) => page.locator(".people").innerText();
 
-  /* ---- desktop, light, family passphrase ---- */
+  /* ---- desktop, light: one password opens the calendar and the figures, one house at a time ---- */
   let { context, page } = await open({ viewport: { width: 1280, height: 900 }, colorScheme: "light", deviceScaleFactor: SCALE });
   await page.waitForSelector(".lock-card");
   assert.equal(await page.locator(".shell").count(), 0, "nothing is shown before unlocking");
+  assert.equal(await page.locator("input[type=password]").count(), 1, "one password is asked for");
   await shot(page, "01-lock", false);
 
   await page.fill("#pw", "non-e-la-password-giusta");
@@ -335,10 +345,21 @@ async function main() {
   await page.waitForSelector(".error:not([hidden])");
   assert.match(await page.textContent(".error"), /non corretta/);
 
-  await page.fill("#pw", FAMILY);
+  await page.fill("#pw", PASSWORD);
   await page.click("button[type=submit]");
   await page.waitForSelector(".shell");
-  assert.equal(await page.locator(".house").count(), 2);
+  // A tab for each house and none for all of them together; the first house is on show.
+  assert.deepEqual(await page.locator(".seg input[name=house] + span").allInnerTexts(), ["Casa Mare", "Casa Lago"]);
+  assert.equal(await houseShown(page), "Casa Mare");
+  assert.equal(await page.locator(".house").count(), 1);
+  assert.equal(await page.locator(".months.single").count(), 1);
+  assert.ok(!/Tutte/.test(await page.locator("#app").innerText()), "no view of all the houses together");
+  // No second lock: the figures open with the same password.
+  assert.equal(await page.locator("input[type=password]").count(), 0, "no second password inside the page");
+  assert.equal(await page.locator(".tiles").count(), 1);
+  assert.ok((await page.textContent("#app")).includes("Netto proprietario"), "the figures are part of the page");
+  assert.ok(!/Chiudi area|seconda password/.test(await page.textContent("#app")));
+
   assert.ok((await page.locator(".month").count()) >= 2, "months rendered");
   assert.ok((await page.locator(".months .bar").count()) > 5, "stays drawn as bars");
   assert.match(await page.textContent(".hours"), /Check-in dalle 15:00, check-out entro le 11:00/);
@@ -346,59 +367,47 @@ async function main() {
   await barsFollowTheHouseHours(page);
   const labels = await page.locator(".months .bar .txt").allTextContents();
   assert.ok(labels.some((text) => /ospiti/.test(text)), "guest counts written inside bars");
-  assert.ok(labels.includes("Bloccata"), "blocked periods labelled");
   assert.match(await page.textContent(".stays thead"), /Check-indalle 15:00Check-outentro le 11:00/);
   assert.equal(await page.locator(".day.today").count(), 1);
-  assert.equal(await page.locator(".owner-lock").count(), 1, "economics stay locked for the family");
-  assert.equal(await page.locator(".tiles").count(), 0);
-  assert.ok(!(await page.textContent("#app")).includes("Netto proprietario"), "no economics rendered for the family");
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 4); // the guests to come and the stays of each house
+  await tablesKeepTheirShape(page, 4); // guests to come, stays, monthly statistics and reservation totals of the house
 
-  // The card of a house says who is there and who is coming next: no free periods, no blocked dates.
-  const cards = await page.locator(".house").evaluateAll((nodes) => nodes.map((node) => node.innerText));
-  for (const card of cards) {
-    assert.match(card, /PROSSIMI OSPITI/i);
-    assert.ok(!/stanotte|periodi liberi|Bloccata|Libera/i.test(card), "a card lists guests only");
-  }
-  const guestRows = (house) => page.locator(".house").nth(house).locator("tbody tr");
-  assert.deepEqual(await page.locator(".house").first().locator("thead th").evaluateAll((cells) => cells.map((cell) => cell.firstChild.textContent)),
+  // The card of the house says who is there and who is coming next: no free periods, no blocked dates.
+  const card = await page.locator(".house").innerText();
+  assert.match(card, /PROSSIMI OSPITI/i);
+  assert.ok(!/stanotte|periodi liberi|Bloccata|Libera/i.test(card), "the card lists guests only");
+  const guestRows = page.locator(".house tbody tr");
+  assert.deepEqual(await page.locator(".house thead th").evaluateAll((cells) => cells.map((cell) => cell.firstChild.textContent)),
     ["Check-in", "Check-out", "Notti", "Canale"]);
-  assert.equal(await guestRows(0).count(), 4, "the first few stays are shown");
-  // The demo has guests in the first house today, a same-day turnover in three days, and the second house's next arrival in five.
-  assert.match(await guestRows(0).nth(0).innerText(), /in casa ora/);
-  assert.equal(await page.locator(".house").first().locator("tbody tr.current").count(), 1);
-  assert.match(await guestRows(0).nth(1).innerText(), /tra 3 giorni/);
-  assert.match(await guestRows(1).nth(0).innerText(), /tra 5 giorni/);
-  assert.equal(await page.locator(".house").nth(1).locator("tbody tr.current").count(), 0);
-  assert.equal(await page.locator(".house tbody .sub", { hasText: /^(tra \d+ giorni|oggi|domani)$/ }).count(), 2, "only the next arrival of each house says how far it is");
+  assert.equal(await guestRows.count(), 4, "the first few stays are shown");
+  // The demo has guests in the first house today and a same-day turnover in three days.
+  assert.match(await guestRows.nth(0).innerText(), /in casa ora/);
+  assert.equal(await page.locator(".house tbody tr.current").count(), 1);
+  assert.match(await guestRows.nth(1).innerText(), /tra 3 giorni/);
+  assert.equal(await page.locator(".house tbody .sub", { hasText: /^(tra \d+ giorni|oggi|domani)$/ }).count(), 1, "only the next arrival says how far it is");
   const allGuests = page.locator('[data-key="guests:mare"]');
   assert.match(await allGuests.innerText(), /^Mostra tutti i \d+ soggiorni$/);
   await allGuests.click();
-  assert.ok((await guestRows(0).count()) > 4, "the whole list on request");
+  assert.ok((await guestRows.count()) > 4, "the whole list on request");
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "guests:mare", "focus stays on the toggle");
   await tablesKeepTheirShape(page, 4);
   await page.locator('[data-key="guests:mare"]').click();
-  assert.equal(await guestRows(0).count(), 4);
+  assert.equal(await guestRows.count(), 4);
 
-  // The first house is violet, the second orange; text on a solid bar is white on the light surface.
-  const lightColours = await page.evaluate(() => {
-    const colour = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
-    return [colour(".house.p0 .swatch", "backgroundColor"), colour(".house.p1 .swatch", "backgroundColor"),
-      colour(".lane.p0 .bar.booking", "backgroundColor"), colour(".lane.p0 .bar.booking", "color")];
-  });
-  assert.deepEqual(lightColours, ["rgb(98, 80, 214)", "rgb(235, 104, 52)", "rgb(98, 80, 214)", "rgb(255, 255, 255)"]);
+  // The first house is violet, the second orange (its tab says so even while the first is on show);
+  // text on a solid bar is white on the light surface.
+  const colour = (selector, property) => page.evaluate(([chosen, wanted]) => getComputedStyle(document.querySelector(chosen))[wanted], [selector, property]);
+  assert.deepEqual([await colour(".house.p0 .swatch", "backgroundColor"), await colour(".seg .p1 .swatch", "backgroundColor"),
+    await colour(".lane.p0 .bar.booking", "backgroundColor"), await colour(".lane.p0 .bar.booking", "color")],
+  ["rgb(98, 80, 214)", "rgb(235, 104, 52)", "rgb(98, 80, 214)", "rgb(255, 255, 255)"]);
 
-  // The family's own periods: listed, drawn over the calendar, each with its standing on the portal.
+  // The family's own periods of this house: listed, drawn over the calendar, each with its standing on the portal.
   // The demo: two families share some blocked nights at the first house, and one of them
   // has a period at the second house on nights still for sale ("con gli zii").
   const demoNames = await names(page);
-  assert.deepEqual(sorted(demoNames), ["Famiglia Bianchi", "Famiglia Bianchi", "Famiglia Rossi"]);
-  const standing = await page.locator(".people .entry-state strong").allTextContents();
-  assert.deepEqual(sorted(standing), ["Bloccata sul portale", "Bloccata sul portale", "Da far bloccare al gestore"]);
-  assert.match(await page.locator(".people .entry", { hasText: "con gli zii" }).innerText(), /ancora in vendita: /);
+  assert.deepEqual(sorted(demoNames), ["Famiglia Bianchi", "Famiglia Rossi"]);
+  assert.deepEqual(await page.locator(".people .entry-state strong").allTextContents(), ["Bloccata sul portale", "Bloccata sul portale"]);
   assert.ok((await page.locator(".months .bar.family.blocked").count()) >= 1, "a protected family period is drawn");
-  assert.ok((await page.locator(".months .bar.family.pending").count()) >= 1, "an unprotected one is drawn differently");
   const familyLabels = await page.locator(".months .bar.family .txt").allTextContents();
   assert.ok(familyLabels.some((text) => /Rossi/.test(text)), "family bars carry the name");
   // The nights the two families share are one bar with both names, touching the bars on either side.
@@ -406,25 +415,21 @@ async function main() {
   assert.ok((await sharedBar.count()) >= 1, "shared nights are drawn as one bar");
   assert.ok((await sharedBar.locator(".txt").allTextContents()).some((text) => /Rossi \+ (Famiglia )?Bianchi/.test(text)), "with both names");
   assert.ok((await barsFollowTheHouseHours(page)).joins >= 2, "and its two edges were measured");
+  assert.equal(await page.locator(".todo").count(), 0, "periods already blocked need no action");
   assert.match(await syncText(page), /Versione dimostrativa: le modifiche restano su questo dispositivo/);
-  await shot(page, "02-family-desktop");
+  await shot(page, "02-first-house-desktop");
 
   await page.hover(".day.today");
   await page.waitForSelector(".tip:not([hidden])");
-  assert.equal(await page.locator(".tip .tip-row").count(), 2, "one readout row per house");
-  const marks = await page.locator(".tip .tip-row .dash").evaluateAll((nodes) => nodes.map((node) => {
+  assert.equal(await page.locator(".tip .tip-row").count(), 1, "the readout is about the house on show");
+  const mark = await page.locator(".tip .tip-row .dash").evaluate((node) => {
     const box = node.getBoundingClientRect();
-    return [Math.round(box.width), Math.round(box.height), getComputedStyle(node).backgroundColor];
-  }));
-  assert.equal(marks.length, 2);
-  for (const [width, height] of marks) assert.deepEqual([width, height], [14, 3], "each row carries its house's mark");
-  assert.notEqual(marks[0][2], marks[1][2], "in that house's colour");
+    return [Math.round(box.width), Math.round(box.height)];
+  });
+  assert.deepEqual(mark, [14, 3], "the row carries the house's mark");
   assert.match(await page.textContent(".tip"), /Ospiti · Casa Maredalle 15:00 di .+ alle 11:00 di /);
-  assert.match(await page.textContent(".tip"), /Libera · Casa Lagodalle 11:00 \(check-out al mattino\)/);
+  assert.ok(!(await page.textContent(".tip")).includes("Casa Lago"));
   await shot(page, "03-tooltip", false);
-  const familyDay = await page.locator(".months .bar.family.pending").first().getAttribute("data-from");
-  await page.hover(`.day[data-day="${familyDay}"]`);
-  await page.waitForFunction(() => /Uso famiglia: Famiglia Bianchi \(da far bloccare al gestore\)/.test(document.querySelector(".tip").textContent));
   const sharedDay = await sharedBar.first().getAttribute("data-from");
   await page.hover(`.day[data-day="${sharedDay}"]`);
   await page.waitForFunction(() => /Uso famiglia: Famiglia Rossi; Uso famiglia: Famiglia Bianchi/.test(document.querySelector(".tip").textContent));
@@ -435,10 +440,12 @@ async function main() {
   await page.keyboard.press("ArrowRight");
   const after = await page.evaluate(() => document.activeElement.getAttribute("data-day"));
   assert.equal(Number(after), Number(before) + 1, "arrow keys walk the days");
-  assert.match(await page.evaluate(() => document.activeElement.getAttribute("aria-label")), /Casa Mare: .+ Casa Lago: /);
+  const spoken = await page.evaluate(() => document.activeElement.getAttribute("aria-label"));
+  assert.match(spoken, /Casa Mare: /);
+  assert.ok(!spoken.includes("Casa Lago"), "a day speaks of the house on show");
   await page.keyboard.press("Enter");
   await page.waitForSelector("dialog.sheet[open]");
-  assert.equal(await page.locator("dialog.sheet .sheet-house").count(), 2, "the day's sheet has one block per house");
+  assert.equal(await page.locator("dialog.sheet .sheet-house").count(), 1, "the day's sheet is about the house on show");
   assert.equal(await page.locator(".tip:not([hidden])").count(), 0, "the readout makes way for the sheet");
   await sheetFits(page);
   await shot(page, "04-day-sheet", false);
@@ -446,38 +453,11 @@ async function main() {
   await sheetGone(page);
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-day")), after, "focus returns to the day");
 
-  const barsBefore = await page.locator(".months .bar").count();
-  await page.locator(".seg input[name=filter]").nth(2).check({ force: true });
-  await page.waitForFunction(() => document.querySelectorAll(".house").length === 1);
-  assert.equal(await page.locator(".months.single").count(), 1);
-  assert.ok((await page.locator(".months .bar").count()) < barsBefore, "the filter removes the other house's bars");
-  await barsFollowTheHouseHours(page);
-  assert.equal(await page.locator(".lane.p1").count() > 0, true, "the remaining house keeps its own hue");
-  assert.equal(await page.locator(".lane.p0").count(), 0);
-  assert.deepEqual(await names(page), ["Famiglia Bianchi"], "and only its family periods stay listed");
-  await shot(page, "05-filter-one-house");
-  await page.locator(".seg input[name=filter]").nth(0).check({ force: true });
-  await page.waitForFunction(() => document.querySelectorAll(".house").length === 2);
-
-  await page.click("text=Mostra i mesi passati");
-  assert.ok((await page.locator(".month.past").count()) >= 1 || new Date().getMonth() === 0);
-
-  await page.reload();
-  await page.waitForSelector(".shell");
-  assert.equal(await page.locator(".lock-card").count(), 0, "the device remembers the family key");
-
-  await page.fill("#owner-pw", FAMILY);
-  await page.click(".owner-lock button[type=submit]");
-  await page.waitForSelector(".owner-lock .error:not([hidden])");
-  assert.equal(await page.locator(".tiles").count(), 0, "the family passphrase does not open the economics");
-  assert.equal(await page.locator(".todo").count(), 0);
-
-  await page.fill("#owner-pw", OWNER);
-  await page.click(".owner-lock button[type=submit]");
-  await page.waitForSelector(".tiles");
+  // The figures of the house on show.
+  assert.match(await figures(page).innerText(), /Casa Mare · anno \d{4}/);
   assert.equal(await page.locator(".tile").count(), 6);
-  assert.equal(await page.locator(".kpi-tables h4", { hasText: "Statistiche mensili" }).count(), 2);
-  assert.equal(await page.locator(".kpi-tables h4", { hasText: "Prenotazioni con check-in" }).count(), 2);
+  assert.equal(await page.locator(".kpi-tables h4", { hasText: "Statistiche mensili" }).count(), 1);
+  assert.equal(await page.locator(".kpi-tables h4", { hasText: "Prenotazioni con check-in" }).count(), 1);
   const headers = await page.locator(".kpi-tables table").first().locator("thead th").allTextContents();
   assert.deepEqual(headers, ["Mese", "Notti", "Occ.", "ADR", "Lordo*", "Imposta", "Netto proprietario", "Netto/lordo*"]);
   const monthNames = await page.locator(".kpi-tables table").first().locator("tbody td:first-child").allTextContents();
@@ -485,6 +465,7 @@ async function main() {
   assert.match(await page.locator(".kpi-tables table").first().locator("tfoot").innerText(), /^Totale \d{4}\s/);
   // The bookings of the year are summed up in one row, not listed one by one.
   const totals = page.locator(".kpi-tables > div").first().locator("table").nth(1);
+  assert.equal(await page.locator(".kpi-tables > div").count(), 1);
   assert.equal(await page.locator(".kpi-tables > div").first().locator("table").count(), 2);
   assert.deepEqual(await totals.evaluate((table) => [...table.children].map((group) => group.tagName + ":" + group.rows.length)),
     ["THEAD:1", "TFOOT:1"]);
@@ -494,21 +475,65 @@ async function main() {
   assert.equal(totalCells[0], "Totale");
   assert.match(totalCells[1], /^\d+$/);
   for (const amount of totalCells.slice(2)) assert.match(amount, /^[\d.]+,\d{2}\s€$/);
-  assert.ok(!/Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()), "no booking is listed in the owner area");
-  await tablesKeepTheirShape(page, 8); // guests to come, stays, monthly statistics and reservation totals of each house
+  assert.ok(!/Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()), "no booking is listed among the figures");
   assert.ok((await page.locator(".col").count()) > 0, "monthly chart drawn");
-  // The owner's to-do: the family periods whose nights are still for sale, and only those.
+  await page.locator(".group").nth(7).hover();
+  await page.waitForSelector(".tip:not([hidden])");
+  await shot(page, "05-figures-desktop");
+  await noSidewaysScroll(page);
+
+  // The other house: its own hue, guests, family periods and figures, and nothing of the first.
+  await showHouse(page, "Casa Lago");
+  assert.equal(await page.locator(".house").count(), 1);
+  assert.equal(await page.locator(".lane.p0").count(), 0);
+  assert.ok((await page.locator(".lane.p1").count()) > 0, "the house keeps its own hue");
+  assert.equal(await colour(".house.p1 .swatch", "backgroundColor"), "rgb(235, 104, 52)");
+  await barsFollowTheHouseHours(page, { turnover: false });
+  assert.ok((await page.locator(".months .bar .txt").allTextContents()).includes("Bloccata"), "blocked periods labelled");
+  assert.match(await page.locator(".house tbody tr").nth(0).innerText(), /tra 5 giorni/);
+  assert.equal(await page.locator(".house tbody tr.current").count(), 0);
+  assert.deepEqual(await names(page), ["Famiglia Bianchi"], "only its family periods are listed");
+  assert.deepEqual(await page.locator(".people .entry-state strong").allTextContents(), ["Da far bloccare al gestore"]);
+  assert.match(await page.locator(".people .entry", { hasText: "con gli zii" }).innerText(), /ancora in vendita: /);
+  assert.ok((await page.locator(".months .bar.family.pending").count()) >= 1, "an unprotected period is drawn differently");
+  // The nights still to be blocked for the family: this house has some, and says which.
   const todo = await page.locator(".todo").innerText();
   assert.match(todo, /Da far bloccare al gestore/);
   assert.match(todo, /Casa Lago\s+.+ → .+ · Famiglia Bianchi/);
-  assert.ok(!todo.includes("Famiglia Rossi") && !todo.includes("Casa Mare"), "periods already blocked need no action");
-  await page.locator(".group").nth(7).hover();
-  await page.waitForSelector(".tip:not([hidden])");
-  await shot(page, "06-owner-desktop");
+  assert.ok(!todo.includes("Famiglia Rossi") && !todo.includes("Casa Mare"));
+  await page.hover(".day.today");
+  await page.waitForFunction(() => /Libera · Casa Lagodalle 11:00 \(check-out al mattino\)/.test(document.querySelector(".tip").textContent));
+  const familyDay = await page.locator(".months .bar.family.pending").first().getAttribute("data-from");
+  await page.hover(`.day[data-day="${familyDay}"]`);
+  await page.waitForFunction(() => /Uso famiglia: Famiglia Bianchi \(da far bloccare al gestore\)/.test(document.querySelector(".tip").textContent));
+  assert.match(await figures(page).innerText(), /Casa Lago · anno \d{4}/);
+  assert.equal(await page.locator(".tile").count(), 6);
+  await tablesKeepTheirShape(page, 4);
   await noSidewaysScroll(page);
+  await shot(page, "06-second-house-desktop");
 
-  await page.click("text=Chiudi area");
-  await page.waitForSelector(".owner-lock");
+  await page.click("text=Mostra i mesi passati");
+  assert.ok((await page.locator(".month.past").count()) >= 1 || new Date().getMonth() === 0);
+
+  // The device remembers the key and the house it was showing.
+  await page.reload();
+  await page.waitForSelector(".shell");
+  assert.equal(await page.locator(".lock-card").count(), 0, "the device remembers the key");
+  assert.equal(await houseShown(page), "Casa Lago", "and the house it showed last");
+  assert.equal(await page.locator(".tiles").count(), 1, "figures included");
+
+  // A device that remembered its keys when the figures had a password of their own still
+  // opens the page; the key of the figures alone opens nothing any more and is not kept.
+  await page.evaluate(() => {
+    const keys = JSON.parse(localStorage.getItem("casecal.keys.v1"));
+    localStorage.setItem("casecal.keys.v1", JSON.stringify({ ...keys, owner: btoa("x".repeat(32)) }));
+  });
+  await page.reload();
+  await page.waitForSelector(".shell");
+  assert.equal(await page.locator(".tiles").count(), 1);
+  assert.deepEqual(await page.evaluate(() => Object.keys(JSON.parse(localStorage.getItem("casecal.keys.v1"))).sort()),
+    ["family", "salt"]);
+
   await page.click("text=Blocca");
   await page.waitForSelector(".lock-card");
   await page.reload();
@@ -516,22 +541,23 @@ async function main() {
   assert.equal(await page.locator(".shell").count(), 0, "locking forgets the key");
   await context.close();
 
-  /* ---- phone, dark, owner passphrase opens everything ---- */
+  /* ---- phone, dark ---- */
   ({ context, page } = await open({ ...devices["iPhone 13"], colorScheme: "dark" }));
-  await unlock(page, OWNER);
+  await unlock(page, PASSWORD);
   await page.waitForSelector(".tiles");
-  assert.equal(await page.locator(".house").count(), 2);
+  assert.equal(await houseShown(page), "Casa Mare", "a device that never chose starts from the first house");
+  assert.equal(await page.locator(".house").count(), 1);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 8);
+  await tablesKeepTheirShape(page, 4);
   // On the dark surface the same two hues are lighter, and the text on a solid bar is dark.
   const darkColours = await page.evaluate(() => {
-    const colour = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
-    return [colour(".house.p0 .swatch", "backgroundColor"), colour(".house.p1 .swatch", "backgroundColor"),
-      colour(".lane.p0 .bar.booking:not(.past)", "color")];
+    const shade = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
+    return [shade(".house.p0 .swatch", "backgroundColor"), shade(".seg .p1 .swatch", "backgroundColor"),
+      shade(".lane.p0 .bar.booking:not(.past)", "color")];
   });
   assert.deepEqual(darkColours, ["rgb(144, 133, 233)", "rgb(217, 89, 38)", "rgb(11, 11, 11)"]);
   await barsFollowTheHouseHours(page);
-  await shot(page, "07-owner-phone-dark");
+  await shot(page, "07-phone-dark");
   // Bars are narrower in landscape or after a resize: labels must be fitted again.
   await page.setViewportSize({ width: 844, height: 390 });
   await page.waitForTimeout(150);
@@ -545,20 +571,23 @@ async function main() {
   // need even that. (At 360 and 375px the stays table once pushed the page sideways,
   // unnoticed because only 390px was looked at.)
   const boxed = ".scroll > table.rows:not(.kpi)";
-  assert.equal(await page.locator(boxed).count(), 4, "guests and stays tables sit in a box that scrolls on its own");
-  for (const width of [320, 344, 360, 375, 412, 430, 390]) {
-    await page.setViewportSize({ width, height: 844 });
-    await page.waitForTimeout(150);
-    await noSidewaysScroll(page, `at ${width}px`);
-    const cramped = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
-      .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
-    if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table needs sideways scrolling`);
+  for (const house of ["Casa Lago", "Casa Mare"]) {
+    await showHouse(page, house);
+    assert.equal(await page.locator(boxed).count(), 2, "guests and stays tables sit in a box that scrolls on its own");
+    for (const width of [320, 344, 360, 375, 412, 430, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await page.waitForTimeout(150);
+      await noSidewaysScroll(page, `at ${width}px (${house})`);
+      const cramped = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
+        .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
+      if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table of ${house} needs sideways scrolling`);
+    }
   }
   // A tap on a day opens its sheet; no hover readout is left behind when it closes.
   await page.locator(".day.today").tap();
   await page.waitForSelector("dialog.sheet[open]");
   assert.match(await page.locator("dialog.sheet").innerText(), /Casa Mare\s+Ospiti · dalle 15:00/);
-  assert.match(await page.locator("dialog.sheet").innerText(), /Casa Lago\s+Libera · /);
+  assert.equal(await page.locator("dialog.sheet .sheet-house").count(), 1, "the sheet is about the house on show");
   await sheetFits(page);
   await shot(page, "08-phone-day-sheet", false);
   await closeSheet(page);
@@ -567,10 +596,11 @@ async function main() {
 
   /* ---- phone, light: the family adds, changes and removes its periods (demo: kept in the browser) ---- */
   ({ context, page } = await open({ ...devices["iPhone 13"], colorScheme: "light" }));
-  await unlock(page, FAMILY);
+  await unlock(page, PASSWORD);
   const sharedBars = () => page.locator('.months .lane.p0 .bar.family[data-stay*="+"]').count();
   const sharedAtFirst = await sharedBars();
-  // From a free day of the calendar.
+  // From a free day of the calendar, at the second house.
+  await showHouse(page, "Casa Lago");
   const lakeDay = await page.evaluate(() => {
     // The day before the pending period at the lake house is free there, by construction of the demo.
     return Number(document.querySelector(".months .bar.family.pending").dataset.from) - 1;
@@ -585,8 +615,11 @@ async function main() {
   assert.equal(await page.evaluate(() => Math.round(Date.parse(document.querySelector("#entry-to").value) / 86400000)), lakeDay + 1);
   await closeSheet(page);
 
-  // From the list. The form offers the families; nothing is saved until one is chosen and the writer is named.
+  // From the list, back at the first house: the form starts from the house on show. It offers the
+  // families; nothing is saved until one is chosen and the writer is named.
+  await showHouse(page, "Casa Mare");
   await openAddForm(page);
+  assert.equal(await page.inputValue("#entry-house"), "mare");
   assert.deepEqual(await page.locator(".choices label").allTextContents(), ["Famiglia Rossi", "Famiglia Bianchi", "Altro"]);
   assert.equal(await page.locator(".choices input:checked").count(), 0, "a device that never wrote assumes no family");
   assert.ok(await page.locator("#entry-who").isHidden(), "free text only under Altro");
@@ -705,8 +738,10 @@ async function main() {
   const missingServer = await serve(missingDir);
   ({ context, page } = await open({ viewport: { width: 1280, height: 900 }, colorScheme: "light", deviceScaleFactor: SCALE },
     `http://127.0.0.1:${missingServer.address().port}/`));
-  await unlock(page, FAMILY);
-  assert.equal(await page.locator(".months .lane.p1").count(), 0, "a house that was not read has no calendar");
+  await unlock(page, PASSWORD);
+  await showHouse(page, "Casa Lago"); // it keeps its tab
+  assert.match(await page.locator(".house").innerText(), /Dati non disponibili/);
+  assert.equal(await page.locator(".months .lane").count(), 0, "a house that was not read has no calendar");
   const unread = page.locator(".people .entry", { hasText: "con gli zii" });
   assert.match(await unread.innerText(), /Non verificabile sul portale\s+il portale di questa casa non è stato letto/);
   await openEditForm(page, "con gli zii", "Famiglia Bianchi");
@@ -725,7 +760,7 @@ async function main() {
   const github = fakeGitHub();
 
   const phone = await open({ ...devices["iPhone 13"], colorScheme: "light" }, logUrl, github);
-  await unlock(phone.page, FAMILY);
+  await unlock(phone.page, PASSWORD);
   await phone.page.waitForFunction(() => /Aggiornato con le modifiche di tutti/.test(document.querySelector(".people").textContent));
   await waitForNames(phone.page, demoNames);
   const firstCall = github.calls[0];
@@ -743,7 +778,7 @@ async function main() {
 
   // A second device opens the page later: the baked entries plus what the log holds.
   const desk = await open({ viewport: { width: 1280, height: 900 }, colorScheme: "dark", deviceScaleFactor: SCALE }, logUrl, github);
-  await unlock(desk.page, FAMILY);
+  await unlock(desk.page, PASSWORD);
   await waitForNames(desk.page, [...demoNames, "Marco e Giulia"]);
   assert.match(await desk.page.locator(".people .entry", { hasText: "Marco e Giulia" }).innerText(), /segnato da Marco[\s\S]*con il cane/);
 

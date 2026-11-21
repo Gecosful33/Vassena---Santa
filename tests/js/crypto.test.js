@@ -7,14 +7,14 @@ const path = require("node:path");
 const C = require("../../casecal/web/crypto.js");
 
 const ROOT = path.resolve(__dirname, "..", "..");
-const FAMILY = "famiglia-di-prova-2026";
-const OWNER = "proprieta-di-prova-2026";
+const FAMILY = "famiglia-di-prova-2026"; // the page's one passphrase
+const OWNER = "proprieta-di-prova-2026"; // any other passphrase: it must open nothing
 
 const PYTHON = `
 import json, sys
 from casecal.crypto import build_envelope, site_salt
 print(json.dumps(build_envelope(
-    family_passphrase=sys.argv[1], owner_passphrase=sys.argv[2],
+    passphrase=sys.argv[1],
     salt=site_salt("test-site"), iterations=100_000,
     family_payload={"title": "Città è già", "properties": []},
     owner_payload={"properties": [{"id": "a", "kpis": []}]},
@@ -22,39 +22,41 @@ print(json.dumps(build_envelope(
 `;
 
 const envelope = JSON.parse(
-  execFileSync("python3", ["-c", PYTHON, FAMILY, OWNER], { cwd: ROOT, encoding: "utf8" })
+  execFileSync("python3", ["-c", PYTHON, FAMILY], { cwd: ROOT, encoding: "utf8" })
 );
 
-test("the family passphrase opens the calendar but not the economics", async () => {
+test("the one passphrase opens the calendar and the figures", async () => {
   const key = await C.deriveKey(FAMILY, envelope.kdf);
   const opened = await C.unlock(envelope, key);
-  assert.equal(opened.tier, "family");
   assert.equal(opened.family.title, "Città è già");
-  assert.equal(opened.owner, null);
-  assert.equal(await C.unlockOwner(envelope, key), null);
+  assert.deepEqual(opened.owner, { properties: [{ id: "a", kpis: [] }] });
+  // The same key then reads and writes the family's entries.
+  assert.deepEqual(Array.from(opened.key), Array.from(key));
+  assert.deepEqual(Object.keys(opened).sort(), ["family", "key", "owner"]);
 });
 
-test("the owner passphrase opens both tiers", async () => {
-  const key = await C.deriveKey(OWNER, envelope.kdf);
-  const opened = await C.unlock(envelope, key);
-  assert.equal(opened.tier, "owner");
+test("figures that cannot be read do not keep the calendar shut", async () => {
+  const key = await C.deriveKey(FAMILY, envelope.kdf);
+  const bytes = C.b64ToBytes(envelope.owner.ct);
+  bytes[10] ^= 1;
+  const damaged = { ...envelope, owner: { iv: envelope.owner.iv, ct: C.bytesToB64(bytes) } };
+  const opened = await C.unlock(damaged, key);
   assert.equal(opened.family.title, "Città è già");
-  assert.deepEqual(opened.owner.properties, [{ id: "a", kpis: [] }]);
-  // The family key recovered from the owner blob equals the one derived from the family passphrase.
-  assert.deepEqual(Array.from(opened.familyKey), Array.from(await C.deriveKey(FAMILY, envelope.kdf)));
+  assert.equal(opened.owner, null);
 });
 
 test("a wrong passphrase opens nothing", async () => {
-  const key = await C.deriveKey("non-e-questa-la-password", envelope.kdf);
-  assert.equal(await C.unlock(envelope, key), null);
+  for (const wrong of ["non-e-questa-la-password", OWNER]) {
+    assert.equal(await C.unlock(envelope, await C.deriveKey(wrong, envelope.kdf)), null);
+  }
 });
 
 test("passphrases are normalised like in Python", async () => {
   const padded = await C.deriveKey("  " + FAMILY + " \n", envelope.kdf);
-  assert.equal((await C.unlock(envelope, padded)).tier, "family");
+  assert.equal((await C.unlock(envelope, padded)).family.title, "Città è già");
   // NFKC: a full-width digit typed by an IME folds to its ASCII form.
   const wide = await C.deriveKey(FAMILY.replace("2026", "202６"), envelope.kdf);
-  assert.equal((await C.unlock(envelope, wide)).tier, "family");
+  assert.equal((await C.unlock(envelope, wide)).family.title, "Città è già");
 });
 
 test("a tampered ciphertext is rejected", async () => {
@@ -65,9 +67,11 @@ test("a tampered ciphertext is rejected", async () => {
   assert.equal(await C.decryptBlob(key, forged.family, "casecal/v1/family"), null);
 });
 
-test("blobs cannot be swapped between tiers", async () => {
+test("the two blobs cannot be swapped, though one key opens both", async () => {
   const key = await C.deriveKey(FAMILY, envelope.kdf);
   assert.equal(await C.decryptBlob(key, envelope.family, "casecal/v1/owner"), null);
+  assert.equal(await C.decryptBlob(key, envelope.owner, "casecal/v1/family"), null);
+  assert.equal(await C.unlock({ ...envelope, family: envelope.owner, owner: envelope.family }, key), null);
 });
 
 test("base64 helpers round-trip arbitrary bytes", () => {

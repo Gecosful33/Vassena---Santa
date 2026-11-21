@@ -1,3 +1,4 @@
+import base64
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -5,15 +6,15 @@ import pytest
 
 from casecal import sync
 from casecal.config import Config, PortalCredentials, PropertyConfig
-from casecal.crypto import open_envelope
+from casecal.crypto import AAD_OWNER, derive_key, encrypt_json, open_envelope
 from casecal.errors import LayoutError, LoginError, SyncAborted
 from casecal.model import MissingProperty, MonthKpi, PropertySnapshot, Reservation, Snapshot, Stay
 from casecal.site import extract_envelope
 from casecal.sync import PreviousPage, collect, describe_error, previous_from_site, publish, target_years
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
-FAMILY = "nebbia-quercia-sentiero-42"
-OWNER = "lanterna-golfo-ardesia-17"
+FAMILY = "nebbia-quercia-sentiero-42"  # the page's one passphrase
+OWNER = "lanterna-golfo-ardesia-17"    # what opened the figures before the single access
 
 CONFIG = Config(
     title="Calendario case",
@@ -168,43 +169,60 @@ def test_years_follow_the_houses_time_zone():
     assert target_years(Config(years_ahead=0, properties=CONFIG.properties), NOW) == [2026]
 
 
-def test_publish_writes_a_page_both_passphrases_open(tmp_path):
+def test_publish_writes_a_page_its_one_passphrase_opens(tmp_path):
     snapshot = Snapshot(generated_at=NOW, properties=[house("santa"), house("vassena")])
-    index = publish(
-        snapshot, family_passphrase=FAMILY, owner_passphrase=OWNER, site_id="test/site", out_dir=tmp_path
-    )
+    index = publish(snapshot, passphrase=FAMILY, site_id="test/site", out_dir=tmp_path)
     envelope = extract_envelope(index.read_text(encoding="utf-8"))
-    family, owner = open_envelope(envelope, family_passphrase=FAMILY)
-    assert family == snapshot.family_payload() and owner is None
-    family, owner = open_envelope(envelope, owner_passphrase=OWNER)
-    assert owner["properties"] == snapshot.owner_payload()["properties"]
+    family, owner = open_envelope(envelope, passphrase=FAMILY)
+    assert family == snapshot.family_payload()
+    assert owner == snapshot.owner_payload()  # the figures open with the same passphrase
+    assert open_envelope(envelope, passphrase=OWNER) == (None, None)
 
 
 def test_the_salt_is_stable_across_nightly_builds(tmp_path):
     snapshot = Snapshot(generated_at=NOW, properties=[house("santa")])
     salts = []
     for night in ("a", "b"):
-        index = publish(
-            snapshot, family_passphrase=FAMILY, owner_passphrase=OWNER, site_id="test/site", out_dir=tmp_path / night
-        )
+        index = publish(snapshot, passphrase=FAMILY, site_id="test/site", out_dir=tmp_path / night)
         salts.append(extract_envelope(index.read_text(encoding="utf-8"))["kdf"]["salt"])
     assert salts[0] == salts[1]  # otherwise remembered keys would break every morning
 
 
 def _published_envelope(tmp_path, snapshot):
-    index = publish(
-        snapshot, family_passphrase=FAMILY, owner_passphrase=OWNER, site_id="test/site", out_dir=tmp_path
-    )
+    index = publish(snapshot, passphrase=FAMILY, site_id="test/site", out_dir=tmp_path)
     return extract_envelope(index.read_text(encoding="utf-8"))
+
+
+def _as_published_with_two_passphrases(envelope, snapshot):
+    """The same page as the job wrote it when the figures had a passphrase of their own."""
+    salt = base64.b64decode(envelope["kdf"]["salt"])
+    family_key = derive_key(FAMILY, salt, envelope["kdf"]["iterations"])
+    figures = {**snapshot.owner_payload(), "family_key": base64.b64encode(family_key).decode()}
+    owner_key = derive_key(OWNER, salt, envelope["kdf"]["iterations"])
+    return {**envelope, "owner": encrypt_json(owner_key, figures, aad=AAD_OWNER)}
 
 
 def test_previous_data_is_recovered_from_the_published_page(tmp_path, monkeypatch):
     original = house("vassena", NOW - timedelta(days=1))
     envelope = _published_envelope(tmp_path, Snapshot(generated_at=NOW, properties=[original]))
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: envelope)
-    restored = previous_from_site("https://example.github.io/repo", family_passphrase=FAMILY, owner_passphrase=OWNER)
+    restored = previous_from_site("https://example.github.io/repo", passphrase=FAMILY)
     assert restored.properties == {"vassena": original}
     assert restored.entries == [] and restored.log is None
+
+
+def test_a_page_published_with_two_passphrases_is_read_back_whole_with_the_old_one(tmp_path, monkeypatch):
+    # What the job finds online the first night after the figures lost their own passphrase.
+    original = house("vassena", NOW - timedelta(days=1))
+    snapshot = Snapshot(generated_at=NOW, properties=[original])
+    old_page = _as_published_with_two_passphrases(_published_envelope(tmp_path, snapshot), snapshot)
+    monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: old_page)
+    whole = previous_from_site("https://x.example", passphrase=FAMILY, legacy_owner_passphrase=OWNER)
+    assert whole.properties == {"vassena": original}
+    # Without the old passphrase the calendar is still recovered; only the figures are not.
+    partial = previous_from_site("https://x.example", passphrase=FAMILY)
+    assert partial.properties["vassena"].stays == original.stays
+    assert partial.properties["vassena"] != original
 
 
 def test_previous_data_is_ignored_when_it_cannot_be_trusted(tmp_path, monkeypatch):
@@ -212,7 +230,7 @@ def test_previous_data_is_ignored_when_it_cannot_be_trusted(tmp_path, monkeypatc
     demo = _published_envelope(
         tmp_path / "demo", Snapshot(generated_at=NOW, properties=[house("santa")], demo=True)
     )
-    args = dict(family_passphrase=FAMILY, owner_passphrase=OWNER)
+    args = dict(passphrase=FAMILY)
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: None)
     assert previous_from_site("https://x.example", **args) == PreviousPage()  # nothing online yet
@@ -222,8 +240,8 @@ def test_previous_data_is_ignored_when_it_cannot_be_trusted(tmp_path, monkeypatc
     assert previous_from_site("https://x.example", **args) == PreviousPage()  # invented data never feeds a real page
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: real)
-    wrong = dict(family_passphrase="x" * 20, owner_passphrase="y" * 20)
-    assert previous_from_site("https://x.example", **wrong) == PreviousPage()  # passphrases were rotated
+    wrong = dict(passphrase="x" * 20, legacy_owner_passphrase="y" * 20)
+    assert previous_from_site("https://x.example", **wrong) == PreviousPage()  # the passphrase was changed
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: {"v": 99})
     assert previous_from_site("https://x.example", **args) == PreviousPage()  # garbage

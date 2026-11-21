@@ -14,7 +14,8 @@ from casecal.config import (
     missing_secrets,
 )
 from casecal.crypto import derive_key, open_envelope, site_salt
-from casecal.demo import DEMO_FAMILY_PASSPHRASE, DEMO_OWNER_PASSPHRASE, demo_snapshot
+from casecal.demo import DEMO_PASSPHRASE, demo_snapshot
+from casecal.errors import TransportError
 from casecal.family import encode_event
 from casecal.familylog import ISSUE_TITLE, GitHubLog
 from casecal.model import BOOKING, CLOSED, PropertySnapshot
@@ -23,9 +24,9 @@ from github_fake import TOKEN, FakeGitHub
 
 ROOT = Path(__file__).resolve().parent.parent
 
+OLD_OWNER_PASSPHRASE = "lanterna-golfo-ardesia-17"  # opened the figures before the single access
 GOOD_ENV = {
-    "FAMILY_PASSPHRASE": "nebbia-quercia-sentiero-42",
-    "OWNER_PASSPHRASE": "lanterna-golfo-ardesia-17",
+    "FAMILY_PASSPHRASE": "nebbia-quercia-sentiero-42",  # the page's one passphrase
     "SANTA_KB_URL": "https://portal.example/a/",
     "SANTA_KB_USER": "user-a",
     "SANTA_KB_PASS": "Portal-pass-a",
@@ -149,9 +150,10 @@ def test_the_nightly_workflow_passes_every_secret_the_program_needs():
 def test_missing_secrets_are_listed_by_name():
     config = load_config(ROOT / "properties.toml")
     assert missing_secrets(config, GOOD_ENV) == []
-    partial = {k: v for k, v in GOOD_ENV.items() if k not in ("OWNER_PASSPHRASE", "VASSENA_KB_PASS")}
+    assert "OWNER_PASSPHRASE" not in GOOD_ENV  # one passphrase is all the page needs
+    partial = {k: v for k, v in GOOD_ENV.items() if k not in ("FAMILY_PASSPHRASE", "VASSENA_KB_PASS")}
     partial["SANTA_KB_USER"] = "   "
-    assert missing_secrets(config, partial) == ["OWNER_PASSPHRASE", "SANTA_KB_USER", "VASSENA_KB_PASS"]
+    assert missing_secrets(config, partial) == ["FAMILY_PASSPHRASE", "SANTA_KB_USER", "VASSENA_KB_PASS"]
 
 
 def test_credentials_are_read_from_the_environment():
@@ -251,7 +253,8 @@ def run_sync(monkeypatch, capsys, tmp_path, github, **env):
     for secret in list(GOOD_ENV.values()) + [value for name, value in env.items() if name in OPTIONAL_SECRETS]:
         assert secret not in printed  # a public log must never show a secret
     page = (tmp_path / "site" / "index.html").read_text(encoding="utf-8")
-    family, _ = open_envelope(extract_envelope(page), family_passphrase=GOOD_ENV["FAMILY_PASSPHRASE"])
+    family, figures = open_envelope(extract_envelope(page), passphrase=GOOD_ENV["FAMILY_PASSPHRASE"])
+    assert figures is not None  # the one passphrase opens the figures too
     return family, printed, outputs.read_text(encoding="utf-8")
 
 
@@ -333,14 +336,40 @@ def test_sync_carries_the_entries_over_a_change_of_passphrase(monkeypatch, capsy
     assert len(github.comments[7]) == 2 and family["log"]["cursor"] == 1001  # rewritten once under the new key
 
 
+def test_sync_opens_the_page_online_with_the_old_second_passphrase_only_if_still_set(monkeypatch, capsys, tmp_path):
+    # A page published when the figures had their own passphrase: the job needs that
+    # passphrase to carry the figures of a house over, the one night it finds such a page.
+    def vassena_down(prop, credentials, years, now):
+        if prop.id == "vassena":
+            raise TransportError("nessuna risposta")
+        return empty_house(prop, credentials, years, now)
+
+    monkeypatch.setattr("casecal.portal.fetch_property", vassena_down)
+    asked = []
+
+    def page_online(site_url, **secrets):
+        asked.append((site_url, secrets))
+        return cli.PreviousPage()
+
+    monkeypatch.setattr(cli, "previous_from_site", page_online)
+    env = {**GOOD_ENV, "SITE_URL": "https://example.github.io/repo"}
+    code, printed = run_cli(monkeypatch, capsys, ["sync", "--out", str(tmp_path / "a")],
+                            {**env, "OWNER_PASSPHRASE": OLD_OWNER_PASSPHRASE})
+    assert code == cli.EXIT_OK and OLD_OWNER_PASSPHRASE not in printed
+    assert asked == [("https://example.github.io/repo",
+                      {"passphrase": GOOD_ENV["FAMILY_PASSPHRASE"], "legacy_owner_passphrase": OLD_OWNER_PASSPHRASE})]
+    asked.clear()
+    code, _ = run_cli(monkeypatch, capsys, ["sync", "--out", str(tmp_path / "b")], env)
+    assert code == cli.EXIT_OK and asked[0][1]["legacy_owner_passphrase"] is None
+
+
 @pytest.mark.parametrize("variant", ["ok", "lagging", "missing"])
 def test_demo_builds_an_openable_page(monkeypatch, capsys, tmp_path, variant):
     code, output = run_cli(monkeypatch, capsys, ["demo", "--out", str(tmp_path), "--variant", variant])
     assert code == cli.EXIT_OK and "dati inventati" in output
+    assert output.count("password") == 1 and DEMO_PASSPHRASE in output  # one password to hand out
     envelope = extract_envelope((tmp_path / "index.html").read_text(encoding="utf-8"))
-    family, owner = open_envelope(
-        envelope, family_passphrase=DEMO_FAMILY_PASSPHRASE, owner_passphrase=DEMO_OWNER_PASSPHRASE
-    )
+    family, owner = open_envelope(envelope, passphrase=DEMO_PASSPHRASE)
     assert family["demo"] is True
     assert bool(family["properties"][1].get("missing")) is (variant == "missing")
     assert len(owner["properties"]) == 2

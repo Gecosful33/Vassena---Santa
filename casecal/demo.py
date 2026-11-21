@@ -32,8 +32,7 @@ from .model import (
     YearTotal,
 )
 
-DEMO_FAMILY_PASSPHRASE = "demo-famiglia-calendario"
-DEMO_OWNER_PASSPHRASE = "demo-proprieta-calendario"
+DEMO_PASSPHRASE = "demo-calendario-delle-case"
 
 _SEASON_RATE = {1: 110, 2: 110, 3: 125, 4: 150, 5: 180, 6: 250, 7: 330, 8: 410, 9: 260, 10: 150, 11: 115, 12: 170}
 _SEASON_FILL = {1: 0.10, 2: 0.10, 3: 0.15, 4: 0.30, 5: 0.40, 6: 0.60, 7: 0.80, 8: 0.90, 9: 0.55, 10: 0.30, 11: 0.10, 12: 0.25}

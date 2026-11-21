@@ -1,17 +1,15 @@
 # Calendario case
 
-Calendario unico delle case in affitto breve, alimentato ogni notte dai portali
-proprietari dei gestori (Krossbooking) e pubblicato come pagina web cifrata.
+Calendario delle case in affitto breve: una sola pagina per tutte, alimentata ogni
+notte dai portali proprietari dei gestori (Krossbooking) e pubblicata cifrata.
 
-- **La famiglia** apre la pagina con una password e vede, per ogni casa, quando
-  arrivano i prossimi ospiti e, nel calendario, quando le date sono bloccate e quando
-  è libera.
-- **Chiunque della famiglia** può segnare dalla pagina chi usa una casa e quando, e
+- **Una sola password** apre la pagina. Chi ce l'ha vede, una casa alla volta, quando
+  arrivano i prossimi ospiti, il calendario con le date occupate, bloccate e libere, e
+  i conti: ricavi, commissioni e netto, mese per mese e in totale sulle prenotazioni
+  dell'anno.
+- **Chiunque abbia la password** può segnare dalla pagina chi usa una casa e quando, e
   correggere o togliere quanto già segnato: lo vedono subito tutti, e per ogni periodo
   la pagina dice se quelle date sono davvero bloccate sul portale del gestore.
-- **La proprietà** ha una seconda password che sblocca anche ricavi, commissioni e
-  netto, mese per mese e in totale sulle prenotazioni dell'anno, e l'elenco delle date
-  che la famiglia conta di usare ma che sono ancora in vendita.
 
 La pagina è raggiungibile da chiunque, ma contiene solo testo cifrato: senza password
 non si legge nulla, nemmeno i nomi delle case.
@@ -24,7 +22,7 @@ ogni notte (GitHub Actions, 02:17 UTC)
      → elenco prenotazioni → logout
   └─ controlli di coerenza (vedi sotto)
   └─ rilettura delle voci inserite dalla famiglia (registro cifrato, vedi sotto)
-  └─ cifratura a due livelli → una sola pagina HTML → GitHub Pages
+  └─ cifratura → una sola pagina HTML → GitHub Pages
 
 durante il giorno (nel browser di chi apre la pagina)
   └─ lettura delle voci inserite dopo l'ultimo aggiornamento notturno
@@ -42,7 +40,7 @@ pagina non chiude nessuna data: è un promemoria condiviso.
 
 Da fare una volta sola, nell'ordine.
 
-### 1. Inserire gli 8 secret
+### 1. Inserire i 7 secret
 
 `Settings → Secrets and variables → Actions → New repository secret`, uno per riga:
 
@@ -54,16 +52,20 @@ Da fare una volta sola, nell'ordine.
 | `VASSENA_KB_URL` | come sopra, per la seconda casa |
 | `VASSENA_KB_USER` | utente del portale |
 | `VASSENA_KB_PASS` | password del portale |
-| `FAMILY_PASSPHRASE` | password di famiglia, almeno 16 caratteri |
-| `OWNER_PASSPHRASE` | password della proprietà, almeno 16 caratteri, diversa dalla precedente |
+| `FAMILY_PASSPHRASE` | la password della pagina, una sola per tutti, almeno 16 caratteri |
 
 Va bene incollare l'indirizzo della pagina su cui si atterra dopo il login
 (`…/<gestore>/property`): conta solo la parte fino al nome del gestore.
 
-Le due password proteggono un testo cifrato che chiunque può scaricare e attaccare
-con calma: la lunghezza è l'unica difesa. Quattro o cinque parole a caso separate da
-un trattino vanno bene; `python -m casecal passphrase` ne genera una. Il programma
-rifiuta password corte, ripetitive o uguali a quelle dei portali.
+La password protegge un testo cifrato che chiunque può scaricare e attaccare con
+calma: la lunghezza è l'unica difesa. Quattro o cinque parole a caso separate da un
+trattino vanno bene; `python -m casecal passphrase` ne genera una. Il programma rifiuta
+password corte, ripetitive o uguali a quelle dei portali.
+
+In origine i conti avevano una password propria, nel secret `OWNER_PASSPHRASE`. Non
+serve più: il job la usa soltanto, se c'è ancora, per rileggere una pagina pubblicata
+quando le password erano due. Dopo la prima esecuzione riuscita il secret si può
+eliminare.
 
 ### 2. Attivare GitHub Pages
 
@@ -80,8 +82,8 @@ compare nel riepilogo del job (`https://<utente>.github.io/<repository>/`).
 
 ### 5. Condividere
 
-Indirizzo e password di famiglia a chi deve vedere il calendario. La password della
-proprietà solo a chi deve vedere i conti.
+Indirizzo e password a chi deve vedere il calendario. Con la stessa password si vedono
+anche i conti: non c'è un accesso separato.
 
 ### 6. Attivare «Chi usa la casa» (facoltativo)
 
@@ -120,13 +122,16 @@ cifrata della pagina.
 
 ## Cosa mostra la pagina
 
-| | Password di famiglia | Password della proprietà |
-|---|---|---|
-| Prossimi ospiti di ogni casa (chi c'è ora e i prossimi arrivi) e calendario unico | sì | sì |
-| Elenco soggiorni e blocchi, con canale e numero di ospiti | sì | sì |
-| «Chi usa la casa»: periodi della famiglia, inseribili e modificabili da tutti | sì | sì |
-| Date che la famiglia conta di usare ma ancora in vendita, con il link al portale | no | sì |
-| Statistiche mensili, grafico del netto, totali delle prenotazioni dell'anno | no | sì |
+Con la password si vede tutto. In alto c'è una scheda per casa: la pagina mostra una
+casa alla volta e ogni dispositivo ricorda l'ultima scelta.
+
+| Sezione | Contenuto, per la casa scelta |
+|---|---|
+| Prossimi ospiti | chi c'è ora e i prossimi arrivi |
+| Calendario | soggiorni degli ospiti, date bloccate e periodi della famiglia |
+| «Chi usa la casa» | periodi della famiglia, inseribili e modificabili da tutti |
+| Soggiorni e blocchi | elenco con canale e numero di ospiti |
+| Area proprietà | date che la famiglia conta di usare ma ancora in vendita, con il link al portale; statistiche mensili, grafico del netto, totali delle prenotazioni dell'anno |
 
 ### Come si legge il calendario
 
@@ -176,8 +181,7 @@ calendario: casa, check-in, check-out, chi la usa (una delle famiglie in elenco,
 «Altro»), una nota facoltativa e il nome di chi scrive. Il dispositivo ricorda il nome
 e la famiglia scelta l'ultima volta. Chiunque può poi modificare o eliminare un
 periodo; l'eliminazione chiede conferma. Non ci sono utenti né permessi: vale la
-fiducia fra chi ha la password di famiglia, e il nome di chi scrive è quello che
-ciascuno dichiara.
+fiducia fra chi ha la password, e il nome di chi scrive è quello che ciascuno dichiara.
 
 Il periodo compare nell'elenco e nel calendario, come barra sopra quelle del gestore,
 con il suo stato rispetto al portale:
@@ -191,8 +195,9 @@ con il suo stato rispetto al portale:
 
 Lo stato si aggiorna da solo a ogni lettura notturna dei portali. Bloccare le date è
 compito del gestore, su richiesta del proprietario: la pagina non scrive nulla sui
-portali e non manda richieste a nessuno. Nell'area proprietà l'elenco «Da far bloccare
-al gestore» raccoglie le notti ancora scoperte, con un link al portale per controllare.
+portali e non manda richieste a nessuno. Nell'area proprietà di ciascuna casa l'elenco
+«Da far bloccare al gestore» raccoglie le notti ancora scoperte, con un link al portale
+per controllare.
 
 **Più famiglie nella stessa casa.** Due periodi possono condividere delle notti nella
 stessa casa: il modulo lo dice prima di salvare («In quelle date c'è anche…») e nel
@@ -227,8 +232,8 @@ marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
 - **Cifratura.** Chiavi derivate con PBKDF2-HMAC-SHA256 (600.000 iterazioni), contenuti
   cifrati con AES-256-GCM. Il browser decifra in locale con WebCrypto; la password non
   lascia mai il dispositivo.
-- **Due livelli.** Il blocco della proprietà contiene la chiave di famiglia: con la
-  password della proprietà si apre tutto, con quella di famiglia solo il calendario.
+- **Un solo accesso.** Calendario e conti sono due blocchi cifrati con la stessa chiave:
+  chi ha la password vede tutto. Non esiste un livello riservato alla proprietà.
 - **Una sola connessione in uscita.** La pagina è un unico file con una
   Content-Security-Policy che ammette solo il proprio script e il proprio stile (per
   hash). Non carica nulla da nessun sito; l'unico indirizzo che può contattare è
@@ -250,19 +255,19 @@ marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
 
 Limiti da conoscere:
 
-- Chi ha la password di famiglia vede il calendario finché la password non cambia. Per
+- Chi ha la password vede calendario e conti finché la password non cambia. Per
   revocare un accesso bisogna cambiare `FAMILY_PASSPHRASE` e ridistribuirla; al run
   successivo le chiavi ricordate sui dispositivi smettono di funzionare.
 - Una password debole si indovina offline. Non riutilizzare password esistenti.
 - Le credenziali dei portali stanno nei secret di GitHub: chi ha accesso in scrittura
   al repository può farle uscire modificando un workflow. Tenere il repository
   personale e l'account GitHub protetto da autenticazione a due fattori.
-- Il token del registro viaggia dentro la parte della pagina cifrata con la password di
-  famiglia: chi ha quella password può estrarlo. Con il solo permesso Issues su questo
+- Il token del registro viaggia dentro la pagina cifrata: chi ha la password può
+  estrarlo. Con il solo permesso Issues su questo
   repository può creare, modificare e cancellare issue e commenti a nome del
   proprietario dell'account (quindi anche rovinare il registro), ma non toccare codice,
   workflow, secret o la pagina. Per questo il permesso non va mai allargato.
-- Cambiare la password di famiglia non revoca il token. Per escludere qualcuno vanno
+- Cambiare la password non revoca il token. Per escludere qualcuno vanno
   rifatti entrambi: token nuovo (quello vecchio si elimina da `Developer settings`) e
   password nuova.
 - Dopo un cambio di `FAMILY_PASSPHRASE` le voci già scritte restano cifrate con la
@@ -319,7 +324,7 @@ il problema.
 | `… il token non ha il permesso Issues su questo repository` | token creato per un altro repository o senza permesso | ripetere il passo 6 |
 | `… le Issues sono disattivate in questo repository` | funzione Issues spenta | `Settings → General → Features → Issues` |
 | `FAMILY_LOG_TOKEN non è un token fine-grained` | inserito un token classico | ripetere il passo 6: il token deve iniziare con `github_pat_` |
-| `N voci del registro di famiglia non si aprono con la password attuale` | password di famiglia cambiata | impostare `OLD_FAMILY_PASSPHRASE` per un'esecuzione |
+| `N voci del registro di famiglia non si aprono con la password attuale` | password cambiata | impostare `OLD_FAMILY_PASSPHRASE` per un'esecuzione |
 | `FAMILY_GROUPS: …` | un nome ripetuto, troppo lungo, o più di 8 nomi | correggere il secret: la pagina usa intanto i nomi validi |
 | `avviso al proprietario non aggiornato (…)` | GitHub ha rifiutato la scrittura della segnalazione | controllare che il workflow abbia ancora `issues: write`; l'elenco nella pagina resta corretto |
 
@@ -345,7 +350,7 @@ python -m pytest
 node --test tests/js/*.test.js
 ```
 
-Pagina di prova con dati inventati (le password vengono stampate):
+Pagina di prova con dati inventati (la password viene stampata):
 
 ```bash
 python -m casecal demo --out dist-demo
@@ -372,7 +377,7 @@ le variabili d'ambiente del passo 1).
 | `casecal/portal.py` | login, lettura delle pagine, logout |
 | `casecal/parse.py` | HTML del portale → dati, con i controlli di coerenza |
 | `casecal/model.py` | modello dati e formato pubblicato |
-| `casecal/crypto.py` | derivazione delle chiavi e cifratura a due livelli |
+| `casecal/crypto.py` | derivazione della chiave e cifratura della pagina |
 | `casecal/family.py` | voci della famiglia: validazione, eventi cifrati, ricostruzione dello stato |
 | `casecal/familylog.py` | registro di famiglia su GitHub: lettura notturna e impostazioni per la pagina |
 | `casecal/alerts.py` | segnalazione al proprietario delle date da far bloccare |

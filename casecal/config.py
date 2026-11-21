@@ -1,7 +1,7 @@
 """Configuration: what is public lives in ``properties.toml``, the rest in secrets.
 
 The repository is public, so the file only names the houses. Portal addresses,
-usernames, passwords and the two passphrases are read from the environment
+usernames, passwords and the page's passphrase are read from the environment
 (GitHub Actions secrets in production).
 """
 
@@ -26,8 +26,10 @@ DEFAULT_CHECK_OUT = "11:00"
 # entries (without it the page is read-only); OLD_FAMILY_PASSPHRASE is set for one
 # run after the family passphrase has been changed, to carry those entries over;
 # FAMILY_GROUPS names the families the entry form offers as fixed choices (the
-# repository is public, so their names live in a secret and travel encrypted).
-OPTIONAL_SECRETS = ("FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS")
+# repository is public, so their names live in a secret and travel encrypted);
+# OWNER_PASSPHRASE opened the figures when they had a passphrase of their own, and
+# is read only to open a page that was published that way.
+OPTIONAL_SECRETS = ("FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS", "OWNER_PASSPHRASE")
 GROUP_LIMIT, GROUP_NAME_LIMIT = 8, 40
 
 
@@ -134,7 +136,7 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
 
 def missing_secrets(config: Config, environ: Mapping[str, str]) -> list[str]:
     """Names (never values) of the secrets that are not set."""
-    names = ["FAMILY_PASSPHRASE", "OWNER_PASSPHRASE"]
+    names = ["FAMILY_PASSPHRASE"]  # the one passphrase of the page
     for prop in config.properties:
         names.extend(prop.secret_names())
     return [name for name in names if not environ.get(name, "").strip()]

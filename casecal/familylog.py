@@ -38,7 +38,7 @@ from .family import (
 ISSUE_TITLE = "Registro di famiglia (dati cifrati: non modificare)"
 ISSUE_BODY = (
     "Questa issue è l'archivio delle voci inserite dalla famiglia nel calendario.\n\n"
-    "Ogni commento è una modifica cifrata: senza la password di famiglia non è leggibile. "
+    "Ogni commento è una modifica cifrata: senza la password del calendario non è leggibile. "
     "Non modificare e non cancellare i commenti, e non chiudere la issue: "
     "il calendario li rilegge a ogni apertura."
 )

@@ -8,7 +8,7 @@ import pytest
 
 from casecal import site
 from casecal.crypto import build_envelope, open_envelope, site_salt
-from casecal.demo import DEMO_FAMILY_PASSPHRASE, DEMO_OWNER_PASSPHRASE, demo_snapshot
+from casecal.demo import DEMO_PASSPHRASE, demo_snapshot
 from casecal.site import SiteError, extract_envelope, render_page, write_site
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
@@ -18,8 +18,7 @@ NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
 def built():
     snapshot = demo_snapshot(NOW)
     envelope = build_envelope(
-        family_passphrase=DEMO_FAMILY_PASSPHRASE,
-        owner_passphrase=DEMO_OWNER_PASSPHRASE,
+        passphrase=DEMO_PASSPHRASE,
         salt=site_salt("test"),
         family_payload=snapshot.family_payload(),
         owner_payload=snapshot.owner_payload(),
@@ -50,8 +49,7 @@ def test_the_page_holds_only_ciphertext(built):
         assert prop.label not in page
         assert prop.unit not in page
     assert snapshot.properties[0].stays[0].start.isoformat() not in page
-    assert DEMO_FAMILY_PASSPHRASE not in page
-    assert DEMO_OWNER_PASSPHRASE not in page
+    assert DEMO_PASSPHRASE not in page
 
 
 def test_the_csp_pins_exactly_the_inlined_code(built):
@@ -221,9 +219,9 @@ def test_the_written_site_can_be_read_back_and_opened(built, tmp_path):
     assert index.name == "index.html"
     assert (tmp_path / "out" / "robots.txt").read_text() == "User-agent: *\nDisallow: /\n"
     envelope = extract_envelope(index.read_text(encoding="utf-8"))
-    family, owner = open_envelope(envelope, owner_passphrase=DEMO_OWNER_PASSPHRASE)
+    family, owner = open_envelope(envelope, passphrase=DEMO_PASSPHRASE)
     assert family == snapshot.family_payload()
-    assert owner["properties"] == snapshot.owner_payload()["properties"]
+    assert owner == snapshot.owner_payload()
 
 
 def test_fetching_a_published_page(monkeypatch, built):

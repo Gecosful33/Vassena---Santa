@@ -23,7 +23,7 @@ from casecal.sync import PreviousPage, family_state, previous_from_site, publish
 from github_fake import SECONDARY_LIMIT, TOKEN, FakeGitHub
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
-FAMILY, OWNER, OLD = "nebbia-quercia-sentiero-42", "lanterna-golfo-ardesia-17", "vecchia-password-di-casa"
+FAMILY, OLD = "nebbia-quercia-sentiero-42", "vecchia-password-di-casa"
 CONFIG = Config(
     site_id="owner/repo",
     properties=(
@@ -277,19 +277,20 @@ def test_a_job_without_a_repository_keeps_the_published_entries():
     assert "non configurato" in state.warnings[0]
 
 
-def test_entries_and_log_settings_travel_in_the_family_tier_only(tmp_path, monkeypatch):
+def test_entries_and_log_settings_travel_encrypted_with_the_calendar(tmp_path, monkeypatch):
     written = entry(who="Ermenegilda", by="Ermenegilda")
     snapshot = Snapshot(generated_at=NOW, properties=[], entries=[FamilyEntry.from_dict(written)],
                         log={"kind": "github", "api": "https://api.github.com", "repo": "owner/repo",
                              "issue": 7, "token": TOKEN, "cursor": 1000, "since": "2026-11-20T11:00:00Z"})
-    index = publish(snapshot, family_passphrase=FAMILY, owner_passphrase=OWNER, site_id="owner/repo", out_dir=tmp_path)
+    index = publish(snapshot, passphrase=FAMILY, site_id="owner/repo", out_dir=tmp_path)
     page = index.read_text(encoding="utf-8")
     assert TOKEN not in page and "Ermenegilda" not in page  # the token is only ever published encrypted
     envelope = extract_envelope(page)
-    family, _ = open_envelope(envelope, family_passphrase=FAMILY)
+    family, figures = open_envelope(envelope, passphrase=FAMILY)
     assert family["entries"] == [written] and family["log"]["token"] == TOKEN
+    assert TOKEN not in str(figures) and "Ermenegilda" not in str(figures)  # in the calendar's blob only
 
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: envelope)
-    previous = previous_from_site("https://x.example", family_passphrase=FAMILY, owner_passphrase=OWNER)
+    previous = previous_from_site("https://x.example", passphrase=FAMILY)
     assert previous.entries == [FamilyEntry.from_dict(written)]
     assert previous.log["issue"] == 7 and previous.log["since"] == "2026-11-20T11:00:00Z"
