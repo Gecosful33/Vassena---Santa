@@ -20,7 +20,8 @@
     return {
       // `family` is the calendar, `owner` the figures: both open with the one password.
       // `house` is the house on show: the page deals with one at a time.
-      family: null, owner: null, props: [], today: 0, house: null, year: null,
+      // `pnl` says that the profit and loss is on show instead of a house.
+      family: null, owner: null, props: [], today: 0, house: null, year: null, pnl: false, pnlYear: null,
       showPast: false, pastStays: {}, allGuests: {}, remembered: false,
       // The family's own entries: the current map, where changes are written (null =
       // read-only page), how far the log has been read, and the key that opens it.
@@ -90,10 +91,13 @@
     monthName: dtf({ timeZone: "UTC", month: "long" }),
     monthShort: dtf({ timeZone: "UTC", month: "short" }),
     // Italian omits the thousands separator on four-digit numbers by default; in a
-    // table of amounts "1.350,00" lines up and reads better than "1350,00".
+    // table of amounts "1.250,00" lines up and reads better than "1250,00".
     money: new Intl.NumberFormat(IT, { style: "currency", currency: "EUR", useGrouping: "always" }),
     money0: new Intl.NumberFormat(IT, { style: "currency", currency: "EUR", maximumFractionDigits: 0, useGrouping: "always" }),
     pct: new Intl.NumberFormat(IT, { style: "percent", maximumFractionDigits: 0 }),
+    pct1: new Intl.NumberFormat(IT, { style: "percent", minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+    // For a column of amounts whose unit is said once, above the table.
+    amount: new Intl.NumberFormat(IT, { minimumFractionDigits: 2, maximumFractionDigits: 2, useGrouping: "always" }),
     int: new Intl.NumberFormat(IT, { useGrouping: "always" })
   };
   var DOW = ["L", "M", "M", "G", "V", "S", "D"];
@@ -219,9 +223,12 @@
     state.props = opened.family.properties.map(L.prepare);
     // The mark stands in for the photo a booking app would show on each bar.
     var marks = L.badges(state.props.map(function (prop) { return prop.label; }));
+    // The photo itself, where the house has one, is on its tab and at the top of its view.
+    var photos = L.photoUrls(opened.family.photos);
     state.props.forEach(function (prop, index) {
       prop.index = index;
       prop.badge = marks[index];
+      prop.photo = photos[prop.id] || null;
     });
     state.today = L.todayInZone(opened.family.tz, Date.now());
     document.title = opened.family.title || genericTitle;
@@ -357,8 +364,10 @@
         checked: option.id === current
       });
       input.addEventListener("change", function () { onPick(option.id, name + ":" + option.id); });
-      var face = el("span", option.index === undefined ? null : { class: "p" + option.index },
-        option.index === undefined ? null : el("i", { class: "swatch" }), option.label);
+      // A house is told by its photo where it has one (ringed in its colour), by its colour alone otherwise.
+      var mark = option.index === undefined ? null
+        : option.photo ? el("img", { class: "thumb", src: option.photo, alt: "", decoding: "sync" }) : el("i", { class: "swatch" });
+      var face = el("span", option.index === undefined ? null : { class: "p" + option.index }, mark, option.label);
       return el("label", null, input, face);
     }));
   }
@@ -892,15 +901,28 @@
     return out;
   }
 
-  /** One tab per house: everything below shows the house chosen here. */
+  var PNL = "p&l"; // the tab that is not a house (a house's id has no such characters)
+
+  /** The cost sheets the profit and loss is drawn from; none where the owner keeps no such sheet. */
+  function pnlSheets() { return state.owner ? L.costSheets(state.owner.costs) : []; }
+
+  /**
+   * One tab per house: everything below shows the house chosen here. Where the costs of
+   * the houses are known there is one more, for the profit and loss of all of them.
+   */
   function houseTabs() {
-    if (state.props.length < 2) return null;
+    var withPnl = pnlSheets().length > 0;
+    if (state.props.length < 2 && !withPnl) return null;
     var options = state.props.map(function (prop) {
-      return { id: prop.id, label: prop.label, index: prop.index };
+      return { id: prop.id, label: prop.label, index: prop.index, photo: prop.photo };
     });
-    return el("div", null, segmented("house", "Casa", options, state.house, function (id, key) {
-      state.house = id;
-      rememberHouse(id);
+    if (withPnl) options.push({ id: PNL, label: "P&L" });
+    return el("div", null, segmented("house", withPnl ? "Vista" : "Casa", options, state.pnl ? PNL : state.house, function (id, key) {
+      state.pnl = id === PNL;
+      if (!state.pnl) {
+        state.house = id;
+        rememberHouse(id);
+      }
       render(key);
     }));
   }
@@ -912,18 +934,26 @@
 
   /** One house: who is there and who is coming next, and nothing else. */
   function houseCard(prop) {
-    var card = el("article", { class: "card house p" + prop.index },
+    // Everything about the house goes in `body`; beside it (above it on a phone) its photo,
+    // so that which house this is can be seen before anything is read.
+    var body = el("div", { class: "house-body" },
       el("div", { class: "house-head" }, el("i", { class: "swatch" }), el("h3", { text: prop.label }),
         prop.unit ? el("span", { class: "unit", text: prop.unit }) : null));
+    var card = el("article", { class: "card house p" + prop.index + (prop.photo ? " with-photo" : "") },
+      // Decoded before it is painted: the page is redrawn whole at every change, and a
+      // picture that came a frame late would blink each time.
+      prop.photo ? el("div", { class: "house-photo" },
+        el("img", { src: prop.photo, alt: "Foto di " + prop.label, decoding: "sync" })) : null,
+      body);
     if (prop.missing) {
-      append(card, el("p", { class: "now" }, icon("unknown"),
+      append(body, el("p", { class: "now" }, icon("unknown"),
         el("span", null, el("strong", { text: "Dati non disponibili" }), " · il portale del gestore non è stato letto")));
       return card;
     }
-    append(card, el("h4", { text: "Prossimi ospiti" }));
+    append(body, el("h4", { text: "Prossimi ospiti" }));
     var guests = L.upcomingGuests(prop, state.today);
     if (!guests.length) {
-      append(card, el("p", { class: "empty", text: "Nessun ospite in arrivo fino a " + shortLabel(prop.to - 1) + "." }));
+      append(body, el("p", { class: "empty", text: "Nessun ospite in arrivo fino a " + shortLabel(prop.to - 1) + "." }));
       return card;
     }
     var expanded = !!state.allGuests[prop.id];
@@ -934,7 +964,7 @@
     var next = guests.filter(function (guest) { return !guest.current; })[0];
     // In a box that scrolls on its own: whatever the screen and the device's font, a
     // table too wide for the card must not make the whole page scroll sideways.
-    append(card, el("div", { class: "scroll" }, el("table", { class: "rows" },
+    append(body, el("div", { class: "scroll" }, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
         el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
         el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
@@ -954,7 +984,7 @@
       })))));
     if (guests.length > GUESTS_SHOWN) {
       var key = "guests:" + prop.id;
-      append(card, el("button", {
+      append(body, el("button", {
         class: "btn quiet more", type: "button", "data-key": key, "aria-expanded": String(expanded),
         text: expanded ? "Mostra meno" : "Mostra tutti i " + guests.length + " soggiorni",
         onclick: function () { state.allGuests[prop.id] = !expanded; render(key); }
@@ -1341,13 +1371,15 @@
       return el("td", { class: columns[i].numeric ? "num" : (columns[i].date ? "date" : null), text: value });
     }));
   }
-  /** A wide table scrolls sideways inside its own box; its first column stays in view. */
+  /**
+   * A table with many columns: as narrow as its figures allow (headings wrap), and where
+   * a phone is narrower still it scrolls sideways inside its own box, first column in view.
+   */
   function wideTable(columns, body, footer) {
     var table = el("table", { class: "rows kpi" },
       el("thead", null, headerRow(columns)),
       body.length ? el("tbody", null, body) : null,
       footer ? el("tfoot", null, footer) : null);
-    table.style.minWidth = (columns.length * 86) + "px";
     return el("div", { class: "scroll" }, table);
   }
 
@@ -1362,13 +1394,16 @@
       columns.push({ name: name, numeric: true });
       if (i === adrAt) columns.push({ name: "Lordo*", numeric: true });
     });
-    if (withRatio) columns.push({ name: "Netto/lordo*", numeric: true });
+    // The hard space keeps the heading to two lines over a column of narrow percentages.
+    if (withRatio) columns.push({ name: "Netto\u00a0su lordo*", numeric: true });
 
+    // Whole euros, and the unit said once under the table: twelve months of several
+    // amounts each have to be read on a phone with as little sideways scrolling as can be.
     function line(label, nightCount, occupancy, vals, gross, net) {
       var out = [label, F.int.format(nightCount), pct(occupancy)];
       vals.forEach(function (value, i) {
-        out.push(euro(value));
-        if (i === adrAt) out.push(euro(gross));
+        out.push(whole(value));
+        if (i === adrAt) out.push(whole(gross));
       });
       if (withRatio) out.push(pct(gross && net !== null ? net / gross : null));
       return out;
@@ -1382,22 +1417,8 @@
             row.occupancy, row.vals, row.gross_cents, row.net_cents), row.nights ? null : "zero");
         }),
         bodyRow(columns, line("Totale " + year, total.nights, total.occupancy, total.vals, total.gross_cents, total.net_cents))),
-      withGross ? el("p", { class: "hint", text: "* calcolato: lordo = notti × ADR" }) : null
-    ];
-  }
-
-  /**
-   * What the bookings checked in during the year add up to, in the columns the portal
-   * lists. The bookings themselves are in the stays of each house, without amounts.
-   */
-  function reservationTotals(year, entry) {
-    var data = L.yearReservations(entry.owner, year);
-    if (!data.rows.length) return null;
-    var columns = [{ name: "" }, { name: "Notti", numeric: true }];
-    (entry.owner.res_columns || []).forEach(function (name) { columns.push({ name: name, numeric: true }); });
-    return [
-      el("h4", { text: "Prenotazioni con check-in nel " + year + " (" + data.rows.length + ")" }),
-      wideTable(columns, [], bodyRow(columns, ["Totale", F.int.format(data.nights)].concat(data.totals.map(euro))))
+      el("p", { class: "hint", text: "Importi in euro, arrotondati all'unità: il totale può differire di poco dalla somma dei mesi." +
+        (withGross ? " * Calcolato: lordo = notti × ADR." : "") })
     ];
   }
 
@@ -1441,8 +1462,194 @@
       el("div", { class: "kpi-tables" }, series.map(function (entry) {
         return el("div", { class: "p" + entry.prop.index },
           el("h3", null, el("i", { class: "swatch" }), entry.prop.label),
-          kpiTable(year, entry), reservationTotals(year, entry));
+          kpiTable(year, entry));
       }))
+    ]);
+    return section;
+  }
+
+  /* ---------- profit and loss ---------- */
+
+  function missing(value) { return value === null || value === undefined; }
+  function amount(cents) { return missing(cents) ? "–" : F.amount.format(cents / 100); }
+  function pct1(ratio) { return missing(ratio) ? "–" : F.pct1.format(ratio); }
+  function nightsCount(count) { return missing(count) ? "–" : F.int.format(count); }
+  /**
+   * A year of a house is read in euros, not in cents: here amounts are rounded to the
+   * euro (halves away from zero, and never "-0"). The cents stay in the houses' own
+   * tables and in the tooltips of the chart.
+   */
+  function wholeEuros(cents) {
+    var value = Math.round(Math.abs(cents) / 100);
+    return cents < 0 && value ? -value : value;
+  }
+  function whole(cents) { return missing(cents) ? "–" : F.int.format(wholeEuros(cents)); }
+  function euro0(cents) { return missing(cents) ? "–" : F.money0.format(wholeEuros(cents)); }
+
+  /**
+   * The statement: income, costs and result, a column per house and one for all of them.
+   * Amounts are plain numbers in whole euros; the unit is said once, above.
+   */
+  function pnlTable(props, result) {
+    var columns = result.houses.concat(props.length > 1 ? [result.total] : []);
+    var width = columns.length + 1;
+    /** One part of the statement: its own group of rows, under a heading that names it. */
+    function part(text, rows) {
+      return el("tbody", null,
+        el("tr", { class: "part" }, el("th", { colspan: String(width), scope: "rowgroup", text: text })), rows);
+    }
+    function row(label, sub, cells, strong) {
+      return el("tr", { class: strong ? "sum" : null },
+        el("th", { scope: "row" }, label, sub ? el("span", { class: "sub", text: sub }) : null),
+        cells.map(function (cell) {
+          return el("td", { class: "num" }, cell.text, cell.sub ? el("span", { class: "sub", text: cell.sub }) : null);
+        }));
+    }
+    function each(format, field) {
+      return columns.map(function (column) { return { text: format(column[field]) }; });
+    }
+    var income = [
+      row("ADR medio", "per notte", each(amount, "adr_cents")), // a price: to the cent
+      row("Notti vendute", null, each(nightsCount, "nights")),
+      row("Ricavi lordi", "notti × ADR", each(whole, "gross_cents")),
+      // What stays with the manager, the channels and the tax office, and its share of the gross.
+      row("Trattenute", "lordo − netto; % del lordo", columns.map(function (column) {
+        return { text: whole(column.withheld_cents), sub: column.withheld_ratio === null ? null : pct(column.withheld_ratio) };
+      })),
+      row("Ricavi netti", "netto proprietario", each(whole, "net_cents"), true)
+    ];
+    var costs = result.lines.map(function (line) {
+      var cells = line.amounts.map(function (value) { return { text: value === null ? "n.a." : whole(value) }; });
+      if (props.length > 1) cells.push({ text: whole(line.total) });
+      return row(line.label, null, cells);
+    });
+    costs.push(row("Totale spese", null, each(whole, "costs_cents"), true));
+    var outcome = [
+      row("Margine", "ricavi netti − spese", each(whole, "margin_cents"), true),
+      row("Margine %", "sul ricavo netto", each(pct1, "margin_ratio")),
+      // At this year's net per night, how many nights pay the year's costs.
+      row("Notti di pareggio", "per coprire le spese", each(nightsCount, "breakeven_nights"))
+    ];
+    var table = el("table", { class: "rows kpi statement" },
+      el("thead", null, el("tr", null,
+        el("th", { scope: "col", text: "Voce" }),
+        props.map(function (prop) {
+          // A long name wraps under its first word, which stays beside the swatch.
+          var cut = prop.label.indexOf(" ");
+          return el("th", { scope: "col", class: "num p" + prop.index },
+            el("span", { class: "keep" }, el("i", { class: "swatch" }), cut < 0 ? prop.label : prop.label.slice(0, cut)),
+            cut < 0 ? null : prop.label.slice(cut));
+        }),
+        props.length > 1 ? el("th", { scope: "col", class: "num", text: "Totale" }) : null)),
+      part("Entrate", income), part("Spese", costs), part("Risultato", outcome));
+    return el("div", { class: "scroll" }, table);
+  }
+
+  /**
+   * Where the costs go: one bar per cost, the largest first, split by house. The bars
+   * rank the costs; the figures are beside them and, house by house, in the statement.
+   */
+  function costBars(props, result, year) {
+    var lines = result.lines.filter(function (line) { return line.total > 0; })
+      .sort(function (a, b) { return b.total - a.total; });
+    if (!lines.length) return null;
+    var most = lines[0].total, all = result.total.costs_cents;
+    var list = el("div", { class: "costs" }, lines.map(function (line, index) {
+      var share = all > 0 ? line.total / all : null;
+      var spoken = line.label + ": " + euro(line.total) + (share === null ? "" : ", " + pct(share) + " delle spese") + ". " +
+        props.map(function (prop, i) {
+          return prop.label + ": " + (line.amounts[i] === null ? "non applicabile" : euro(line.amounts[i]));
+        }).join(". ") + "." + (line.note ? " Nota: " + line.note + "." : "");
+      var track = el("span", { class: "track", "aria-hidden": "true" }, props.map(function (prop, i) {
+        var value = line.amounts[i];
+        if (!(value > 0)) return null;
+        var segment = el("i", { class: "seg-bar p" + prop.index });
+        segment.style.width = (value / most * 100) + "%";
+        return segment;
+      }));
+      return el("button", { class: "cost", type: "button", "data-line": String(index), "aria-label": spoken },
+        el("span", { class: "cost-name" }, line.label, line.note ? el("span", { class: "sub", text: line.note }) : null),
+        el("span", { class: "cost-value" }, euro0(line.total),
+          share === null ? null : el("span", { class: "sub", text: pct(share) })),
+        track);
+    }));
+    attachTips(list, ".cost", function (node) {
+      var line = lines[Number(node.getAttribute("data-line"))];
+      return [el("div", { class: "tip-title", text: line.label })].concat(props.map(function (prop, i) {
+        return el("div", { class: "tip-row p" + prop.index }, el("i", { class: "dash" }),
+          el("span", null, el("span", { class: "val", text: line.amounts[i] === null ? "n.a." : euro(line.amounts[i]) }),
+            el("span", { class: "who", text: " · " + prop.label })));
+      }), line.note ? el("div", { class: "tip-note", text: line.note }) : null);
+    });
+    return el("figure", { class: "chart" },
+      el("figcaption", { text: "Dove vanno le spese · " + year }),
+      props.length > 1 ? seriesLegend(props) : null,
+      list);
+  }
+
+  /** "2026", "2026 e 2027", "2026, 2027 e 2028". */
+  function yearList(years) {
+    return years.length < 2 ? years.join("") : years.slice(0, -1).join(", ") + " e " + years[years.length - 1];
+  }
+
+  /** The year's profit and loss of the houses: what came in, what they cost, what is left. */
+  function pnlSection() {
+    var byId = {};
+    state.owner.properties.forEach(function (raw) { byId[raw.id] = raw; });
+    var props = state.props.filter(function (prop) { return !prop.missing && byId[prop.id] && !byId[prop.id].missing; });
+    // A year's income is known only while the portals are read for it (see coveredYears).
+    var readFor = L.coveredYears(props);
+    var written = pnlSheets();
+    var sheets = written.filter(function (candidate) { return readFor.indexOf(candidate.year) >= 0; });
+    var years = sheets.map(function (candidate) { return candidate.year; });
+    var current = L.parts(state.today).y;
+    if (years.indexOf(state.pnlYear) < 0) state.pnlYear = years.indexOf(current) >= 0 ? current : years[years.length - 1];
+    var year = state.pnlYear;
+    var sheet = sheets.filter(function (candidate) { return candidate.year === year; })[0];
+    var section = el("section", { class: "card pnl" },
+      el("div", { class: "section-head" },
+        el("h2", { text: "P&L · conto economico" }),
+        years.length > 1 ? segmented("pnl-year", "Anno", years.map(function (y) { return { id: y, label: String(y) }; }), year,
+          function (id, key) { state.pnlYear = id; render(key); }) : null));
+    if (!props.length) {
+      append(section, el("p", { class: "empty", text: "Nessun dato dei portali disponibile: il conto economico non si può calcolare." }));
+      return section;
+    }
+    if (!sheet) {
+      var have = yearList(written.map(function (candidate) { return candidate.year; }));
+      append(section, el("p", { class: "empty", text: readFor.length
+        ? "Il conto economico si calcola per gli anni letti dai portali dei gestori (" + yearList(readFor) + "), " +
+          "ma il file delle spese ha solo " + (written.length === 1 ? "il foglio " : "i fogli ") + have +
+          ". Aggiungi al file un foglio che abbia per nome l'anno."
+        : "I dati dei portali non coprono un anno intero: il conto economico non si può calcolare." }));
+      return section;
+    }
+    var result = L.profitAndLoss(props.map(function (prop) { return byId[prop.id]; }), sheet, year);
+    var total = result.total;
+    var revised = "";
+    if (typeof sheet.updated === "string" && /^\d{4}-\d{2}-\d{2}$/.test(sheet.updated)) {
+      revised = " (ultima revisione: " + F.shortYear.format(dateOf(L.dayFromYmd(sheet.updated))) + ")";
+    }
+    // A house whose portal could not be read has no income to show: it is left out, and said.
+    var left = state.props.filter(function (prop) { return props.indexOf(prop) < 0; })
+      .map(function (prop) { return prop.label; });
+    append(section, [
+      // The income of a year still running is what is booked so far; the costs are the whole year's.
+      el("p", { class: "hint", text: "Entrate: prenotazioni acquisite finora per il " + year + ", dai portali dei gestori " +
+        "(aggiornate ogni notte). Spese: importi annui dal foglio delle spese" + revised + "." }),
+      left.length ? el("p", { class: "hint left-out" }, icon("unknown"),
+        el("span", { text: (left.length === 1 ? "Non compresa: " : "Non comprese: ") + left.join(", ") +
+          " (dati del portale non disponibili)." })) : null,
+      el("div", { class: "tiles" },
+        tile("Ricavi netti", euro0(total.net_cents), props.length > 1 ? "delle " + props.length + " case" : null),
+        tile("Spese annue", euro0(total.costs_cents)),
+        tile("Margine", euro0(total.margin_cents), "ricavi netti − spese"),
+        tile("Margine %", pct1(total.margin_ratio), "sul ricavo netto"),
+        tile("Notti di pareggio", nightsCount(total.breakeven_nights), "vendute: " + F.int.format(total.nights))),
+      pnlTable(props, result),
+      // Each figure is rounded on its own, as in any statement kept in whole euros.
+      el("p", { class: "hint rounding", text: "Importi arrotondati all'euro: un totale può differire di 1 € dalla somma delle sue voci." }),
+      costBars(props, result, year)
     ]);
     return section;
   }
@@ -1459,8 +1666,10 @@
     var scroll = window.scrollY;
     hideTip();
     clear(root);
-    root.appendChild(el("div", { class: "shell" },
-      header(), banners(), houseTabs(), availability(), calendar(), familySection(), staysSection(), ownerSection(), footer()));
+    if (state.pnl && !pnlSheets().length) state.pnl = false;
+    root.appendChild(el("div", { class: "shell" }, header(), banners(), houseTabs(),
+      state.pnl ? pnlSection()
+        : [availability(), calendar(), familySection(), staysSection(), ownerSection(), footer()]));
     window.scrollTo(0, scroll);
     fitLabels();
     // Not while a sheet is open: the focus belongs inside it, and it will ask for it back.

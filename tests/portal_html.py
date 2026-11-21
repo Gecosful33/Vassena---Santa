@@ -20,7 +20,7 @@ MONTHS = ["Gen", "Feb", "Mar", "Apr", "Mag", "Giu", "Lug", "Ago", "Set", "Ott", 
 
 
 def eur(amount: Decimal | int | str | None) -> str:
-    """Format like the portal: ``€1.841,03``; empty for a missing amount."""
+    """Format like the portal: ``€1.234,56``; empty for a missing amount."""
     if amount is None:
         return ""
     value = Decimal(amount).quantize(Decimal("0.01"))

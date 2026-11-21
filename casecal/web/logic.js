@@ -52,6 +52,23 @@ var CaseCalLogic = (function () {
     return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
 
+  /**
+   * The houses' pictures as addresses an <img> can show, by house id. Only what the
+   * nightly job makes is let through: a WebP, written in base64.
+   */
+  function photoUrls(photos) {
+    var urls = {};
+    if (!photos || typeof photos !== "object") return urls;
+    Object.keys(photos).forEach(function (id) {
+      var photo = photos[id];
+      if (photo && photo.type === "image/webp" && typeof photo.data === "string" &&
+          /^[A-Za-z0-9+/]+={0,2}$/.test(photo.data)) {
+        urls[id] = "data:image/webp;base64," + photo.data;
+      }
+    });
+    return urls;
+  }
+
   /** Turn one house of the family payload into the shape the views work with. */
   function prepare(raw) {
     var checkIn = clockMinutes(raw.check_in, 15 * 60), checkOut = clockMinutes(raw.check_out, 11 * 60);
@@ -500,8 +517,9 @@ var CaseCalLogic = (function () {
 
   /* ---- economics (the figures) ----
    * Every manager configures their own amount columns, so a house's owner entry
-   * carries the column names (kpi_columns, res_columns), the values row by row,
-   * and the index of the few columns the page must recognise (kpi_roles, res_roles).
+   * carries the column names of its monthly statistics (kpi_columns), the values row
+   * by row, and the index of the few columns the page must recognise (kpi_roles).
+   * No amount of a single booking is published: the figures are by month and by year.
    */
 
   function roleIndex(roles, name) {
@@ -513,7 +531,6 @@ var CaseCalLogic = (function () {
     var years = {};
     ownerProps.forEach(function (p) {
       (p.kpis || []).forEach(function (k) { years[k.y] = true; });
-      (p.reservations || []).forEach(function (r) { years[+r[0].slice(0, 4)] = true; });
     });
     return Object.keys(years).map(Number).sort(function (a, b) { return a - b; });
   }
@@ -615,25 +632,6 @@ var CaseCalLogic = (function () {
     };
   }
 
-  /** Reservations of one house whose check-in falls in `year`, with column totals. */
-  function yearReservations(owner, year) {
-    var columns = owner.res_columns || [];
-    var rows = (owner.reservations || []).filter(function (r) {
-      return +r[0].slice(0, 4) === year;
-    }).map(function (r) {
-      var start = dayFromYmd(r[0]), end = dayFromYmd(r[1]);
-      return { start: start, end: end, nights: end - start, channel: r[2], guests: r[3], vals: r[4] };
-    });
-    var totals = columns.map(function (_, i) {
-      var sum = 0, any = false;
-      rows.forEach(function (row) { if (known(row.vals[i])) { sum += row.vals[i]; any = true; } });
-      return any ? sum : null;
-    });
-    var nights = 0;
-    rows.forEach(function (row) { nights += row.nights; });
-    return { rows: rows, totals: totals, nights: nights };
-  }
-
   /** A "nice" axis maximum and step for values in euro cents. */
   function axisScale(maxCents) {
     var euros = Math.max(1, maxCents / 100);
@@ -646,11 +644,108 @@ var CaseCalLogic = (function () {
     return { max: ticks[ticks.length - 1], ticks: ticks };
   }
 
+  /* ---- profit and loss ----
+   * Income is what the portals report for the year. Costs are the yearly amounts the
+   * owner keeps in a spreadsheet, one sheet per year (owner.costs): a list of lines,
+   * each with an amount per house in cents, or nothing where it does not apply.
+   */
+
+  /** The cost sheets worth showing, oldest year first. Anything malformed is left out. */
+  function costSheets(costs) {
+    return (Array.isArray(costs) ? costs : []).filter(function (sheet) {
+      return sheet && typeof sheet.year === "number" && Array.isArray(sheet.lines) && sheet.lines.length;
+    }).sort(function (a, b) { return a.year - b.year; });
+  }
+
+  /**
+   * The years every one of these houses is read for from its portal, whole: 1 January
+   * to 31 December. Only for those can a year's income be set against its costs: a
+   * year the portals are no longer (or not yet) read for would show an income of nothing.
+   */
+  function coveredYears(props) {
+    var houses = props.filter(function (prop) { return !prop.missing; });
+    if (!houses.length) return [];
+    var first = Math.max.apply(null, houses.map(function (prop) { return prop.from; }));
+    var last = Math.min.apply(null, houses.map(function (prop) { return prop.to; }));
+    var years = [];
+    for (var year = parts(first).y; dayOf(year + 1, 1, 1) <= last; year++) {
+      if (dayOf(year, 1, 1) >= first) years.push(year);
+    }
+    return years;
+  }
+
+  /**
+   * The year's result, house by house and all together.
+   * `ownerProps` are the houses' figures (the readable ones, in page order) and
+   * `sheet` the cost sheet of that year.
+   *
+   * Returns { houses: [column], total: column, lines: [{ label, note, amounts, total }] }.
+   * A column holds: nights, adr_cents, gross_cents, withheld_cents (what the manager,
+   * the channels and the flat tax keep: gross less net) with withheld_ratio, net_cents,
+   * costs_cents, margin_cents (net less costs) with margin_ratio (of the net), and
+   * breakeven_nights: how many nights at this year's net per night pay the costs.
+   * In a line, `amounts` follow the houses; null says the cost does not apply there.
+   */
+  function profitAndLoss(ownerProps, sheet, year) {
+    var lines = ((sheet && sheet.lines) || []).map(function (line) {
+      var amounts = ownerProps.map(function (prop) {
+        var value = line && line.amounts ? line.amounts[prop.id] : null;
+        return typeof value === "number" && isFinite(value) ? value : null;
+      });
+      var total = null;
+      amounts.forEach(function (value) { if (value !== null) total = (total || 0) + value; });
+      return {
+        label: typeof line.label === "string" ? line.label : "",
+        note: typeof line.note === "string" ? line.note : "",
+        amounts: amounts, total: total
+      };
+    }).filter(function (line) { return line.total !== null; });
+
+    function column(figures, costs) {
+      var nights = figures.nights || 0, gross = figures.gross_cents, net = figures.net_cents;
+      var withheld = known(gross) && known(net) ? gross - net : null;
+      var margin = known(net) ? net - costs : null;
+      var perNight = known(net) && nights > 0 ? net / nights : null;
+      return {
+        nights: nights,
+        adr_cents: known(gross) && nights > 0 ? Math.round(gross / nights) : null,
+        gross_cents: known(gross) ? gross : null,
+        withheld_cents: withheld,
+        withheld_ratio: withheld !== null && gross > 0 ? withheld / gross : null,
+        net_cents: known(net) ? net : null,
+        costs_cents: costs,
+        margin_cents: margin,
+        margin_ratio: margin !== null && net > 0 ? margin / net : null,
+        // Whole nights, and never the "-0" that rounding up a hair under nothing gives.
+        breakeven_nights: perNight !== null && perNight > 0 ? Math.max(0, Math.ceil(costs / perNight - 1e-9)) : null
+      };
+    }
+
+    // A house that sold no night that year earned nothing: its costs are a loss, not a
+    // blank. One whose portal publishes no such column at all stays unknown.
+    var years = ownerProps.map(function (prop) {
+      var house = houseYear(prop, year);
+      function or0(value, role) {
+        return known(value) ? value : (!house.nights && roleIndex(prop.kpi_roles, role) !== null ? 0 : null);
+      }
+      return { nights: house.nights, gross_cents: or0(house.gross_cents, "adr"), net_cents: or0(house.net_cents, "net") };
+    });
+    var houses = years.map(function (figures, i) {
+      var costs = 0;
+      lines.forEach(function (line) { costs += line.amounts[i] || 0; });
+      return column(figures, costs);
+    });
+    var all = combine(years, year);
+    var allCosts = 0;
+    houses.forEach(function (house) { allCosts += house.costs_cents; });
+    return { houses: houses, total: column(all, allCosts), lines: lines };
+  }
+
   return {
     DAY_MS: DAY_MS,
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,
-    prepare: prepare, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
+    prepare: prepare, photoUrls: photoUrls, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
     upcomingGuests: upcomingGuests, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
     weekSegments: weekSegments, clipToWeek: clipToWeek, cellPosition: cellPosition, clockMinutes: clockMinutes,
     freshness: freshness, familyRuns: familyRuns, shortName: shortName,
@@ -658,7 +753,8 @@ var CaseCalLogic = (function () {
     entryStatus: entryStatus, checkEntry: checkEntry, entryId: entryId, MAX_NIGHTS: MAX_NIGHTS,
     firstOpenDay: firstOpenDay, draftPeriod: draftPeriod,
     kpiYears: kpiYears, yearRows: yearRows, columnTotals: columnTotals, houseYear: houseYear, combine: combine,
-    yearReservations: yearReservations, roleIndex: roleIndex, axisScale: axisScale
+    roleIndex: roleIndex, axisScale: axisScale,
+    costSheets: costSheets, coveredYears: coveredYears, profitAndLoss: profitAndLoss
   };
 })();
 if (typeof module !== "undefined" && module.exports) { module.exports = CaseCalLogic; }

@@ -16,11 +16,13 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+from . import r2
+from .alerts import needing_action, reconcile
 from .config import Config, PortalCredentials, PropertyConfig
+from .costs import CostSheet, CostsError, parse_workbook, sheets_from_payload
 from .crypto import EnvelopeError, build_envelope, derive_key, open_envelope, site_salt
 from .errors import PortalError, SyncAborted
 from .family import FamilyEntry, FamilyError, ordered
-from .alerts import needing_action, reconcile
 from .familylog import (
     DEFAULT_API,
     FamilyLogError,
@@ -37,6 +39,7 @@ from .model import (
     Snapshot,
     properties_from_payloads,
 )
+from .photos import FILE_ENDINGS, MAX_SOURCE_BYTES, Photo, PhotoError, photos_from_payload, prepare
 from .site import SiteError, fetch_published_envelope, render_page, write_site
 
 Fetcher = Callable[[PropertyConfig, PortalCredentials, Sequence[int], datetime], PropertySnapshot]
@@ -49,6 +52,8 @@ class PreviousPage:
     properties: dict[str, PropertySnapshot] = field(default_factory=dict)
     entries: list[FamilyEntry] = field(default_factory=list)
     log: dict[str, Any] | None = None
+    costs: list[CostSheet] = field(default_factory=list)
+    photos: dict[str, Photo] = field(default_factory=dict)
 
 
 PreviousLoader = Callable[[], PreviousPage]
@@ -174,7 +179,13 @@ def previous_from_site(
         except FamilyError:
             continue
     log = family.get("log")
-    return PreviousPage(properties=properties, entries=entries, log=log if isinstance(log, dict) else None)
+    return PreviousPage(
+        properties=properties,
+        entries=entries,
+        log=log if isinstance(log, dict) else None,
+        costs=sheets_from_payload((owner or {}).get("costs")),
+        photos=photos_from_payload(family.get("photos")),
+    )
 
 
 def family_state(
@@ -220,6 +231,126 @@ def family_state(
         known_houses={prop.id for prop in config.properties},
         fallback=keep_published,
     )
+
+
+@dataclass
+class CostsState:
+    """The houses' running costs for the page, and what went wrong reading them."""
+
+    sheets: list[CostSheet]
+    warnings: list[str]
+    fresh: bool = False  # the owner's workbook was read in this run
+
+
+def costs_state(
+    config: Config,
+    *,
+    url: str | None,
+    key_id: str | None,
+    secret: str | None,
+    load_previous: PreviousLoader,
+    fetch: Callable[[str, str, str], bytes] | None = None,
+) -> CostsState:
+    """The cost sheets of the owner's workbook, fetched from its private bucket.
+
+    Without the three settings there is no profit and loss, and nothing to
+    report. With them, a workbook that cannot be fetched or trusted leaves the
+    costs already published in place and flags the run: a slip in a spreadsheet
+    must neither empty the page nor keep the calendar from being published.
+    """
+    given = [bool(url), bool(key_id), bool(secret)]
+    if not any(given):
+        return CostsState([], [])
+
+    def kept(reason: str) -> CostsState:
+        return CostsState(
+            list(load_previous().costs),
+            [f"spese non lette ({reason}): restano quelle già pubblicate"],
+        )
+
+    if not all(given):
+        return kept("servono tutti e tre i secret COSTS_R2_URL, COSTS_R2_ACCESS_KEY_ID e COSTS_R2_SECRET_ACCESS_KEY")
+    try:
+        data = (fetch or r2.fetch)(url, key_id, secret)
+        sheets, warnings = parse_workbook(data, [(prop.id, prop.label) for prop in config.properties])
+    except (r2.StorageError, CostsError) as exc:
+        return kept(str(exc))  # written to be public: no address, no key, nothing of the content
+    except Exception as exc:  # noqa: BLE001 - the calendar comes first
+        return kept(describe_error(exc))
+    return CostsState(sheets, warnings, fresh=True)
+
+
+@dataclass
+class PhotosState:
+    """The houses' photos for the page, and what went wrong reading them."""
+
+    photos: dict[str, Photo]
+    warnings: list[str]
+    fresh: list[str] = field(default_factory=list)  # the houses whose photo was read in this run
+    absent: list[str] = field(default_factory=list)  # the houses with no file in the bucket
+
+
+def photos_state(
+    config: Config,
+    *,
+    url: str | None,
+    key_id: str | None,
+    secret: str | None,
+    load_previous: PreviousLoader,
+    fetch: Callable[..., bytes] | None = None,
+) -> PhotosState:
+    """A photo of each house, from the bucket that holds the workbook of costs.
+
+    The photo of a house is the file named after the house's id (``santa.jpg``,
+    or one of the other endings a photo is saved with) kept beside the
+    workbook: ``url`` is the workbook's address, and tells where to look. A
+    house without such a file simply has no photo; that is no fault, and is
+    only noted. A file that cannot be fetched, or is not a photo, keeps the
+    picture already published and flags the run; like the costs, nothing about
+    the photos can stop the calendar.
+    """
+    given = [bool(url), bool(key_id), bool(secret)]
+    if not any(given):
+        return PhotosState({}, [])
+    if not all(given):
+        # Said once already, where the costs are read: here it only means "leave things as they are".
+        return PhotosState(dict(load_previous().photos), [])
+
+    def stored(house: str) -> bytes | None:
+        """The file kept for this house, under the first of its possible names; None if there is none."""
+        for ending in FILE_ENDINGS:
+            try:
+                return (fetch or r2.fetch)(r2.sibling(url, house + ending), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+            except r2.NotFound:
+                continue
+        return None
+
+    photos: dict[str, Photo] = {}
+    fresh: list[str] = []
+    absent: list[str] = []
+    failed: dict[str, list[str]] = {}  # reason -> houses
+    for prop in config.properties:
+        try:
+            raw = stored(prop.id)
+            if raw is None:
+                absent.append(prop.id)  # no photo of this house: nothing to show
+                continue
+            photos[prop.id] = prepare(raw)
+            fresh.append(prop.id)
+        except (r2.StorageError, PhotoError) as exc:
+            failed.setdefault(str(exc), []).append(prop.id)  # written to be public
+        except Exception as exc:  # noqa: BLE001 - the calendar comes first
+            failed.setdefault(describe_error(exc), []).append(prop.id)
+
+    warnings: list[str] = []
+    if failed:
+        published = load_previous().photos
+        for reason, houses in failed.items():
+            for house in houses:
+                if house in published:
+                    photos[house] = published[house]
+            warnings.append(f"foto non lette ({reason}): {', '.join(houses)}; restano quelle già pubblicate")
+    return PhotosState(photos, warnings, fresh, absent)
 
 
 def alert_owner(

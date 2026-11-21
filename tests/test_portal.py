@@ -68,15 +68,15 @@ def stats(params):
     for night, klass in cells.items():
         if "b" not in klass.split():
             counts[night.month] = counts.get(night.month, 0) + 1
-    rows = {m: (n, [Decimal("250"), Decimal("52.50") * n, Decimal("136.50") * n]) for m, n in counts.items()}
+    rows = {m: (n, [Decimal("240"), Decimal("50.40") * n, Decimal("131.20") * n]) for m, n in counts.items()}
     return stats_page(year, cells=cells, kpi_rows=rows)
 
 
 def reservations(params):
     assert params == {"from": "01/01/2026", "to": "31/12/2027", "type": "stay", "apt": "7"}
     return reservations_page(date(2026, 1, 1), date(2027, 12, 31), HEADERS, [
-        ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("750"), eur("409.50"), ""],
-        ["Casa Demo", "Anna Verdi", "Diretta", "2", "31/12/2026", "03/01/2027", eur("750"), eur("409.50"), ""],
+        ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("720"), eur("393.60"), ""],
+        ["Casa Demo", "Anna Verdi", "Diretta", "2", "31/12/2026", "03/01/2027", eur("720"), eur("393.60"), ""],
     ])
 
 
@@ -224,12 +224,12 @@ def test_reading_a_house_end_to_end():
     assert len(snapshot.kpis) == 24 and snapshot.kpi_roles == {"adr": 0, "net": 2}
     # 30 and 31 May, 1 June and 31 December fall in 2026; 1 and 2 January in 2027.
     assert [(t.year, t.room_nights) for t in snapshot.kpi_totals] == [(2026, 4), (2027, 2)]
-    assert snapshot.reservation_columns == ("Totale pernottamento", "Netto proprietario")
-    assert len(snapshot.reservations) == 2
     assert snapshot.warnings == []
     assert (snapshot.check_in_time, snapshot.check_out_time) == ("15:00", "11:00")
     assert snapshot.portal_url == BASE + "/property/details/id/7"  # where the owner closes dates by hand
     assert "Rossi" not in repr(snapshot) and "Verdi" not in repr(snapshot)
+    # What each booking bills is looked at while reading and goes no further.
+    assert not [name for name in vars(snapshot) if "reserv" in name]
     asked = [call[3] for call in session.calls if call[1] == "/demo/vr/stats"]
     assert asked == [{}, {"year": "2026", "apt": "7"}, {"year": "2027", "apt": "7"}]
     assert all(call[0] == "GET" for call in session.calls[2:]), "after login the portal is only read"
@@ -246,7 +246,6 @@ def test_losing_the_reservation_details_does_not_lose_the_calendar():
     snapshot = read_property(logged_in(session), PROP, None, [2026, 2027], NOW)
     assert [s.kind for s in snapshot.stays] == [BOOKING, CLOSED, BOOKING]
     assert all(s.channel is None for s in snapshot.stays)
-    assert snapshot.reservations == [] and snapshot.reservation_columns == ()
     assert snapshot.warnings == ["dettagli delle prenotazioni non letti (TransportError: elenco prenotazioni: HTTP 503)"]
 
 
@@ -256,7 +255,7 @@ OWN_USE = PropertyConfig(id="santa", label="Santa", env="SANTA", unpaid_is_own_u
 def unpaid_second_booking(params):
     """The second booking bills nothing: every amount the portal lists for it is zero."""
     return reservations_page(date(2026, 1, 1), date(2027, 12, 31), HEADERS, [
-        ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("750"), eur("409.50"), ""],
+        ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("720"), eur("393.60"), ""],
         ["Casa Demo", "Anna Verdi", "Diretta", "2", "31/12/2026", "03/01/2027", eur("0"), eur("0"), ""],
     ])
 
@@ -270,8 +269,7 @@ def test_bookings_that_bill_nothing_are_the_owners_own_stays_where_the_house_say
         (date(2026, 12, 31), date(2027, 1, 3), CLOSED, None, None),  # blocked dates, not guests
     ]
     assert snapshot.warnings == []
-    # The owner's figures stay the portal's: the row is still listed, and the nights still count as sold.
-    assert len(snapshot.reservations) == 2
+    # The owner's figures stay the portal's: the nights still count as sold.
     assert [(t.year, t.room_nights) for t in snapshot.kpi_totals] == [(2026, 4), (2027, 2)]
 
 
@@ -331,7 +329,7 @@ def test_an_own_stay_across_the_edge_of_the_data_is_matched_on_the_part_inside()
 def test_reservations_that_disagree_with_the_calendar_are_reported():
     def partial(params):
         return reservations_page(date(2026, 1, 1), date(2027, 12, 31), HEADERS, [
-            ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("750"), eur("409.50"), ""],
+            ["Casa Demo", "Mario Rossi", "Airbnb", "4", "30/05/2026", "02/06/2026", eur("720"), eur("393.60"), ""],
         ])
 
     session = FakeSession(routes({("GET", "/demo/reservations"): partial}))
@@ -344,7 +342,7 @@ def test_a_calendar_that_contradicts_the_statistics_fails_the_house():
     def lying(params):
         year = int(params.get("year", 2026))
         cells = {night: klass for night, klass in grid_classes(STAYS).items() if night.year == year}
-        return stats_page(year, cells=cells, kpi_rows={5: (9, ["250", "472.50", "1228.50"])})
+        return stats_page(year, cells=cells, kpi_rows={5: (9, ["240", "453.60", "1180.80"])})
 
     session = FakeSession(routes({("GET", "/demo/vr/stats"): lying}))
     with pytest.raises(LayoutError, match="non coincidono"):

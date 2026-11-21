@@ -215,7 +215,10 @@ class Reservation:
     """One booking with its amounts, as listed by the portal.
 
     Deliberately has no guest name, nationality or contact: those columns are
-    never read.
+    never read. A booking is read for two things only: the channel and the
+    number of guests of its stay, and whether it bills anything at all (the
+    owners' own stays do not). It is never published: the page carries no
+    amount of a single booking.
     """
 
     check_in: date
@@ -227,22 +230,6 @@ class Reservation:
     def __post_init__(self) -> None:
         if not self.check_out > self.check_in:
             raise DataError("a reservation must end after it starts")
-
-    def to_row(self) -> list[Any]:
-        return [
-            self.check_in.isoformat(),
-            self.check_out.isoformat(),
-            self.channel,
-            self.guests,
-            _cents_row(self.values),
-        ]
-
-    @classmethod
-    def from_row(cls, row: list[Any]) -> "Reservation":
-        check_in, check_out, channel, guests, cents = row
-        return cls(
-            date.fromisoformat(check_in), date.fromisoformat(check_out), channel, guests, _decimal_row(cents)
-        )
 
 
 def _check_roles(roles: Mapping[str, int], columns: tuple[str, ...], what: str) -> None:
@@ -268,9 +255,6 @@ class PropertySnapshot:
     kpi_roles: dict[str, int] = field(default_factory=dict)
     kpis: list[MonthKpi] = field(default_factory=list)
     kpi_totals: list[YearTotal] = field(default_factory=list)
-    reservation_columns: tuple[str, ...] = ()
-    reservation_roles: dict[str, int] = field(default_factory=dict)
-    reservations: list[Reservation] = field(default_factory=list)
     # House rules (HH:MM): they come from the configuration, not from the portal.
     check_in_time: str = "15:00"
     check_out_time: str = "11:00"
@@ -290,9 +274,7 @@ class PropertySnapshot:
                 raise DataError("stay outside the covered window")
 
         self.kpi_columns = tuple(self.kpi_columns)
-        self.reservation_columns = tuple(self.reservation_columns)
         _check_roles(self.kpi_roles, self.kpi_columns, "KPI")
-        _check_roles(self.reservation_roles, self.reservation_columns, "reservation")
 
         seen: set[tuple[int, int]] = set()
         for kpi in self.kpis:
@@ -309,11 +291,6 @@ class PropertySnapshot:
             if len(total.values) != len(self.kpi_columns):
                 raise DataError("KPI totals do not match the KPI columns")
         self.kpi_totals = sorted(self.kpi_totals, key=lambda total: total.year)
-
-        for reservation in self.reservations:
-            if len(reservation.values) != len(self.reservation_columns):
-                raise DataError("reservation row does not match the reservation columns")
-        self.reservations = sorted(self.reservations, key=lambda r: (r.check_in, r.check_out))
 
     def family_dict(self) -> dict[str, Any]:
         return {
@@ -336,9 +313,6 @@ class PropertySnapshot:
             "kpi_roles": dict(self.kpi_roles),
             "kpis": [kpi.to_dict() for kpi in self.kpis],
             "kpi_totals": [total.to_dict() for total in self.kpi_totals],
-            "res_columns": list(self.reservation_columns),
-            "res_roles": dict(self.reservation_roles),
-            "reservations": [reservation.to_row() for reservation in self.reservations],
         }
 
     @classmethod
@@ -361,9 +335,8 @@ class PropertySnapshot:
             kpi_roles=dict(owner.get("kpi_roles", {})),
             kpis=[MonthKpi.from_dict(raw) for raw in owner.get("kpis", [])],
             kpi_totals=[YearTotal.from_dict(raw) for raw in owner.get("kpi_totals", [])],
-            reservation_columns=tuple(owner.get("res_columns", ())),
-            reservation_roles=dict(owner.get("res_roles", {})),
-            reservations=[Reservation.from_row(row) for row in owner.get("reservations", [])],
+            # A page published when the bookings were listed one by one also carries
+            # their rows ("reservations"): they are no longer read back.
         )
 
 
@@ -401,6 +374,10 @@ class Snapshot:
     log: dict[str, Any] | None = None
     # The families the entry form offers as fixed choices (empty: free text).
     groups: list[str] = field(default_factory=list)
+    # The houses' running costs, one sheet per year (see costs.py). Empty: no P&L.
+    costs: list[Any] = field(default_factory=list)
+    # A small picture of each house, by house id (see photos.py). A house may have none.
+    photos: dict[str, Any] = field(default_factory=dict)
 
     def family_payload(self) -> dict[str, Any]:
         return {
@@ -414,12 +391,15 @@ class Snapshot:
             "entries": [entry.to_dict() for entry in self.entries],
             "log": self.log,
             "groups": list(self.groups),
+            # With the calendar: a photo says which house this is, nothing about its figures.
+            "photos": {house: photo.to_dict() for house, photo in self.photos.items()},
         }
 
     def owner_payload(self) -> dict[str, Any]:
         return {
             "v": PAYLOAD_VERSION,
             "properties": [prop.owner_dict() for prop in self.properties],
+            "costs": [sheet.to_dict() for sheet in self.costs],
         }
 
 

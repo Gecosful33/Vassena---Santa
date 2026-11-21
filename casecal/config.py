@@ -28,8 +28,14 @@ DEFAULT_CHECK_OUT = "11:00"
 # FAMILY_GROUPS names the families the entry form offers as fixed choices (the
 # repository is public, so their names live in a secret and travel encrypted);
 # OWNER_PASSPHRASE opened the figures when they had a passphrase of their own, and
-# is read only to open a page that was published that way.
-OPTIONAL_SECRETS = ("FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS", "OWNER_PASSPHRASE")
+# is read only to open a page that was published that way. The three COSTS_R2_*
+# turn on the profit and loss: where the owner's spreadsheet of running costs is
+# kept (a private Cloudflare R2 bucket) and the read-only key that fetches it.
+# The houses' photos are kept beside that spreadsheet and need no setting of their own.
+COSTS_SECRETS = ("COSTS_R2_URL", "COSTS_R2_ACCESS_KEY_ID", "COSTS_R2_SECRET_ACCESS_KEY")
+OPTIONAL_SECRETS = (
+    "FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS", "OWNER_PASSPHRASE", *COSTS_SECRETS
+)
 GROUP_LIMIT, GROUP_NAME_LIMIT = 8, 40
 
 

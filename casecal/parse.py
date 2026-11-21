@@ -72,7 +72,7 @@ def _label(node: Tag) -> str:
 
 
 def _money(text: str) -> Decimal | None:
-    """``€1.841,03`` -> ``Decimal('1841.03')``; ``None`` if it is not an amount."""
+    """``€1.234,56`` -> ``Decimal('1234.56')``; ``None`` if it is not an amount."""
     match = _MONEY_RE.match(text)
     if not match:
         return None

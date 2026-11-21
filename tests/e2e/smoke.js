@@ -278,7 +278,57 @@ async function main() {
     }, label);
   }
   const houseShown = (page) => page.locator(".house h3").innerText();
+  /** The photo at the top of the house on show: what it is, whether it decoded, where it sits. */
+  const housePhoto = (page) => page.locator(".house .house-photo img").evaluate((img) => {
+    const box = (node) => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
+    return {
+      loaded: img.complete && img.naturalWidth > 0, natural: [img.naturalWidth, img.naturalHeight], alt: img.alt, src: img.src,
+      box: box(img), card: box(img.closest(".house")), head: box(img.closest(".house").querySelector(".house-head")),
+      fit: getComputedStyle(img).objectFit
+    };
+  });
   const figures = (page) => page.locator("section.card", { hasText: "Area proprietà" });
+
+  /* ---- helpers for the profit and loss ---- */
+  /** The tab after the houses: the profit and loss of all of them. */
+  async function showPnl(page) {
+    await press(page, page.locator(".seg label", { hasText: /^P&L$/ }));
+    await page.waitForSelector("section.pnl .statement");
+  }
+  /** "18.235 €", "226,90", "38,1%" -> a number. */
+  const amountOf = (text) => Number(text.replace(/[^\d,-]/g, "").replace(",", "."));
+  /**
+   * The statement as numbers. `rows` maps each line to its cells (a house each, then
+   * all of them), null where a cell holds no figure; `order` lists [part, line].
+   */
+  const readStatement = (page) => page.evaluate(() => {
+    const own = (cell) => [...cell.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent).join("").trim();
+    const number = (text) => (/\d/.test(text) ? Number(text.replace(/[^\d,-]/g, "").replace(",", ".")) : null);
+    const rows = {}, order = [];
+    let part = "";
+    for (const row of document.querySelectorAll(".pnl .statement tbody tr")) {
+      if (row.classList.contains("part")) { part = row.textContent; continue; }
+      const label = own(row.querySelector("th"));
+      rows[label] = [...row.querySelectorAll("td")].map((cell) => number(own(cell)));
+      order.push([part, label]);
+    }
+    return { rows, order };
+  });
+  /** The chart of the costs as drawn: a bar per cost, a segment per house that bears it. */
+  const readCostBars = (page) => page.locator(".pnl .cost").evaluateAll((nodes) => nodes.map((node) => {
+    const track = node.querySelector(".track").getBoundingClientRect();
+    const segments = [...node.querySelectorAll(".seg-bar")].map((segment) => segment.getBoundingClientRect());
+    return {
+      label: [...node.querySelector(".cost-name").childNodes].filter((child) => child.nodeType === Node.TEXT_NODE)
+        .map((child) => child.textContent).join(""),
+      value: node.querySelector(".cost-value").firstChild.textContent,
+      drawn: segments.reduce((sum, box) => sum + box.width, 0) / track.width,
+      thickness: Math.max(...segments.map((box) => box.height)),
+      segments: segments.length,
+      inside: segments.every((box) => box.left >= track.left - 0.5 && box.right <= track.right + 0.5)
+    };
+  }));
 
   /* ---- helpers for the family's entries ---- */
   const names = (page) => page.locator(".people .entry-who strong").allTextContents();
@@ -349,10 +399,33 @@ async function main() {
   await page.click("button[type=submit]");
   await page.waitForSelector(".shell");
   // A tab for each house and none for all of them together; the first house is on show.
-  assert.deepEqual(await page.locator(".seg input[name=house] + span").allInnerTexts(), ["Casa Mare", "Casa Lago"]);
+  // After the houses, the profit and loss: the demo knows what they cost.
+  assert.deepEqual(await page.locator(".seg input[name=house] + span").allInnerTexts(), ["Casa Mare", "Casa Lago", "P&L"]);
   assert.equal(await houseShown(page), "Casa Mare");
   assert.equal(await page.locator(".house").count(), 1);
   assert.equal(await page.locator(".months.single").count(), 1);
+  // Which house is which can be seen before anything is read: each tab carries the house's
+  // photo, ringed in its colour, and the house on show has it at the top of its card.
+  const thumbs = await page.locator(".seg input[name=house] + span").evaluateAll((faces) => faces.map((face) => {
+    const img = face.querySelector("img.thumb");
+    return img && { loaded: img.complete && img.naturalWidth > 0, src: img.src, alt: img.alt, size: [img.offsetWidth, img.offsetHeight],
+      ring: getComputedStyle(img).boxShadow };
+  }));
+  assert.equal(thumbs[2], null, "the P&L is not a house: no photo");
+  assert.ok(thumbs[0].loaded && thumbs[1].loaded, "the photos on the tabs decode");
+  assert.ok(thumbs[0].src.startsWith("data:image/webp;base64,") && thumbs[0].src !== thumbs[1].src, "each house has its own");
+  assert.deepEqual([thumbs[0].size, thumbs[1].size], [[22, 22], [22, 22]]);
+  assert.deepEqual([thumbs[0].alt, thumbs[1].alt], ["", ""], "the name beside the photo already says which house");
+  assert.match(thumbs[0].ring, /rgb\(98, 80, 214\)/);
+  assert.match(thumbs[1].ring, /rgb\(235, 104, 52\)/);
+  assert.equal(await page.locator(".seg .swatch").count(), 0, "the photo takes the place of the plain swatch");
+  const seaPhoto = await housePhoto(page);
+  assert.ok(seaPhoto.loaded, "the photo of the house decodes");
+  assert.deepEqual([seaPhoto.alt, seaPhoto.natural, seaPhoto.fit], ["Foto di Casa Mare", [840, 560], "cover"]);
+  assert.equal(seaPhoto.src, thumbs[0].src, "the same picture as on the tab");
+  // On a wide screen it stands beside the guests, inside the card.
+  assert.ok(seaPhoto.box.left >= seaPhoto.card.left && seaPhoto.box.right <= seaPhoto.head.left, "photo beside the house's name");
+  assert.ok(Math.abs(seaPhoto.box.width / seaPhoto.box.height - 1.5) < 0.02 && seaPhoto.box.bottom <= seaPhoto.card.bottom);
   assert.ok(!/Tutte/.test(await page.locator("#app").innerText()), "no view of all the houses together");
   // No second lock: the figures open with the same password.
   assert.equal(await page.locator("input[type=password]").count(), 0, "no second password inside the page");
@@ -370,7 +443,7 @@ async function main() {
   assert.match(await page.textContent(".stays thead"), /Check-indalle 15:00Check-outentro le 11:00/);
   assert.equal(await page.locator(".day.today").count(), 1);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 4); // guests to come, stays, monthly statistics and reservation totals of the house
+  await tablesKeepTheirShape(page, 3); // guests to come, stays and monthly statistics of the house
 
   // The card of the house says who is there and who is coming next: no free periods, no blocked dates.
   const card = await page.locator(".house").innerText();
@@ -390,14 +463,15 @@ async function main() {
   await allGuests.click();
   assert.ok((await guestRows.count()) > 4, "the whole list on request");
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "guests:mare", "focus stays on the toggle");
-  await tablesKeepTheirShape(page, 4);
+  await tablesKeepTheirShape(page, 3);
   await page.locator('[data-key="guests:mare"]').click();
   assert.equal(await guestRows.count(), 4);
 
-  // The first house is violet, the second orange (its tab says so even while the first is on show);
-  // text on a solid bar is white on the light surface.
+  // The first house is violet, the second orange (the ring around the photo on its tab says so
+  // even while the first is on show); text on a solid bar is white on the light surface.
   const colour = (selector, property) => page.evaluate(([chosen, wanted]) => getComputedStyle(document.querySelector(chosen))[wanted], [selector, property]);
-  assert.deepEqual([await colour(".house.p0 .swatch", "backgroundColor"), await colour(".seg .p1 .swatch", "backgroundColor"),
+  const ringOf = (shadow) => shadow.slice(0, shadow.indexOf(")") + 1); // "rgb(...) 0px 0px 0px 2px" -> its colour
+  assert.deepEqual([await colour(".house.p0 .swatch", "backgroundColor"), ringOf(await colour(".seg .p1 .thumb", "boxShadow")),
     await colour(".lane.p0 .bar.booking", "backgroundColor"), await colour(".lane.p0 .bar.booking", "color")],
   ["rgb(98, 80, 214)", "rgb(235, 104, 52)", "rgb(98, 80, 214)", "rgb(255, 255, 255)"]);
 
@@ -457,25 +531,26 @@ async function main() {
   assert.match(await figures(page).innerText(), /Casa Mare · anno \d{4}/);
   assert.equal(await page.locator(".tile").count(), 6);
   assert.equal(await page.locator(".kpi-tables h4", { hasText: "Statistiche mensili" }).count(), 1);
-  assert.equal(await page.locator(".kpi-tables h4", { hasText: "Prenotazioni con check-in" }).count(), 1);
-  const headers = await page.locator(".kpi-tables table").first().locator("thead th").allTextContents();
-  assert.deepEqual(headers, ["Mese", "Notti", "Occ.", "ADR", "Lordo*", "Imposta", "Netto proprietario", "Netto/lordo*"]);
-  const monthNames = await page.locator(".kpi-tables table").first().locator("tbody td:first-child").allTextContents();
+  const monthly = page.locator(".kpi-tables table").first();
+  const headers = await monthly.locator("thead th").allTextContents();
+  assert.deepEqual(headers.map((name) => name.replace(/\u00a0/g, " ")),
+    ["Mese", "Notti", "Occ.", "ADR", "Lordo*", "Imposta", "Netto proprietario", "Netto su lordo*"]);
+  const monthNames = await monthly.locator("tbody td:first-child").allTextContents();
   assert.deepEqual([monthNames.length, monthNames[0], monthNames[11]], [12, "Gennaio", "Dicembre"]);
-  assert.match(await page.locator(".kpi-tables table").first().locator("tfoot").innerText(), /^Totale \d{4}\s/);
-  // The bookings of the year are summed up in one row, not listed one by one.
-  const totals = page.locator(".kpi-tables > div").first().locator("table").nth(1);
+  assert.match(await monthly.locator("tfoot").innerText(), /^Totale \d{4}\s/);
+  // Its amounts are whole euros with the unit said once below: fewer characters, less to scroll on a phone.
+  const monthlyCells = await monthly.locator("tbody td.num, tfoot td.num").allTextContents();
+  assert.equal(monthlyCells.length, 13 * 7);
+  for (const cell of monthlyCells) assert.match(cell, /^(\d{1,3}(\.\d{3})*|\d+%|–)$/, `"${cell}" is not a whole number`);
+  assert.ok(monthlyCells.some((cell) => /^\d{1,3}\.\d{3}$/.test(cell)), "thousands are grouped");
+  assert.match(await page.locator(".kpi-tables .hint").innerText(), /Importi in euro, arrotondati all'unità.*lordo = notti × ADR/);
+  // Nothing else among the figures: the year's bookings are neither listed nor summed up
+  // (what the houses earned and cost is the P&L's business).
   assert.equal(await page.locator(".kpi-tables > div").count(), 1);
-  assert.equal(await page.locator(".kpi-tables > div").first().locator("table").count(), 2);
-  assert.deepEqual(await totals.evaluate((table) => [...table.children].map((group) => group.tagName + ":" + group.rows.length)),
-    ["THEAD:1", "TFOOT:1"]);
-  assert.deepEqual(await totals.locator("thead th").allTextContents(),
-    ["", "Notti", "Totale pernottamento", "Imposta", "Commissioni gestore", "Commissioni OTA", "Netto proprietario"]);
-  const totalCells = await totals.locator("tfoot td").allTextContents();
-  assert.equal(totalCells[0], "Totale");
-  assert.match(totalCells[1], /^\d+$/);
-  for (const amount of totalCells.slice(2)) assert.match(amount, /^[\d.]+,\d{2}\s€$/);
-  assert.ok(!/Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()), "no booking is listed among the figures");
+  assert.equal(await page.locator(".kpi-tables table").count(), 1);
+  assert.equal(await page.locator(".kpi-tables h4").count(), 1);
+  assert.ok(!/Prenotazioni con check-in|Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()),
+    "no booking is listed or totalled among the figures");
   assert.ok((await page.locator(".col").count()) > 0, "monthly chart drawn");
   await page.locator(".group").nth(7).hover();
   await page.waitForSelector(".tip:not([hidden])");
@@ -488,6 +563,8 @@ async function main() {
   assert.equal(await page.locator(".lane.p0").count(), 0);
   assert.ok((await page.locator(".lane.p1").count()) > 0, "the house keeps its own hue");
   assert.equal(await colour(".house.p1 .swatch", "backgroundColor"), "rgb(235, 104, 52)");
+  const lakePhoto = await housePhoto(page);
+  assert.ok(lakePhoto.loaded && lakePhoto.alt === "Foto di Casa Lago" && lakePhoto.src === thumbs[1].src, "the other house, the other photo");
   await barsFollowTheHouseHours(page, { turnover: false });
   assert.ok((await page.locator(".months .bar .txt").allTextContents()).includes("Bloccata"), "blocked periods labelled");
   assert.match(await page.locator(".house tbody tr").nth(0).innerText(), /tra 5 giorni/);
@@ -508,9 +585,87 @@ async function main() {
   await page.waitForFunction(() => /Uso famiglia: Famiglia Bianchi \(da far bloccare al gestore\)/.test(document.querySelector(".tip").textContent));
   assert.match(await figures(page).innerText(), /Casa Lago · anno \d{4}/);
   assert.equal(await page.locator(".tile").count(), 6);
-  await tablesKeepTheirShape(page, 4);
+  await tablesKeepTheirShape(page, 3);
   await noSidewaysScroll(page);
   await shot(page, "06-second-house-desktop");
+
+  // The profit and loss: what the houses earned, what they cost, what is left.
+  await showPnl(page);
+  assert.equal(await page.locator(".house, .months, .people").count(), 0, "the P&L takes the place of the house's own view");
+  const pnl = page.locator("section.pnl");
+  assert.deepEqual(await pnl.locator(".tile .label").allTextContents(),
+    ["Ricavi netti", "Spese annue", "Margine", "Margine %", "Notti di pareggio"]);
+  // The statement: a column per house and one for both.
+  assert.deepEqual(await pnl.locator(".statement thead th").allTextContents(), ["Voce", "Casa Mare", "Casa Lago", "Totale"]);
+  assert.deepEqual(await pnl.locator(".statement tr.part").allTextContents(), ["Entrate", "Spese", "Risultato"]);
+  const { rows, order } = await readStatement(page);
+  assert.deepEqual(order.filter(([part]) => part !== "Spese").map(([, label]) => label),
+    ["ADR medio", "Notti vendute", "Ricavi lordi", "Trattenute", "Ricavi netti", "Margine", "Margine %", "Notti di pareggio"]);
+  const costLabels = order.filter(([part, label]) => part === "Spese" && label !== "Totale spese").map(([, label]) => label);
+  assert.ok(costLabels.length >= 10, "the costs are listed one by one");
+  assert.equal(order[order.findIndex(([, label]) => label === "Totale spese") + 1][0], "Risultato", "their total closes the list");
+  for (const label of costLabels) {
+    const [mare, lago, both] = rows[label];
+    assert.equal((mare || 0) + (lago || 0), both, `${label}: the total is the sum of the houses`);
+  }
+  assert.ok(costLabels.some((label) => rows[label][0] === null) && costLabels.some((label) => rows[label][1] === null),
+    "a cost of one house only is blank for the other");
+  assert.equal(await pnl.locator(".statement td", { hasText: /^n\.a\.$/ }).count(), 2);
+  for (const column of [0, 1, 2]) {
+    const listed = costLabels.reduce((sum, label) => sum + (rows[label][column] || 0), 0);
+    assert.equal(rows["Totale spese"][column], listed, "the costs add up, column by column");
+    // Each figure is rounded to the euro on its own: a difference of one is rounding, more is a mistake.
+    assert.ok(Math.abs(rows["Ricavi lordi"][column] - rows["Trattenute"][column] - rows["Ricavi netti"][column]) <= 1);
+    assert.ok(Math.abs(rows["Ricavi netti"][column] - rows["Totale spese"][column] - rows["Margine"][column]) <= 1);
+    assert.ok(rows["Notti di pareggio"][column] > 0 && Number.isInteger(rows["Notti di pareggio"][column]));
+  }
+  assert.equal(rows["Notti vendute"][0] + rows["Notti vendute"][1], rows["Notti vendute"][2]);
+  assert.ok(Math.abs(rows["Ricavi netti"][0] + rows["Ricavi netti"][1] - rows["Ricavi netti"][2]) <= 1);
+  assert.ok(Math.abs(rows["Margine"][0] + rows["Margine"][1] - rows["Margine"][2]) <= 1);
+  // The headline figures are the statement's column for both houses.
+  const headline = await pnl.locator(".tile").evaluateAll((tiles) => Object.fromEntries(tiles.map((tile) =>
+    [tile.querySelector(".label").textContent, tile.querySelector(".value").textContent])));
+  assert.match(headline["Ricavi netti"], /^[\d.]+\s€$/);
+  assert.deepEqual(
+    ["Ricavi netti", "Spese annue", "Margine", "Margine %", "Notti di pareggio"].map((label) => amountOf(headline[label])),
+    ["Ricavi netti", "Totale spese", "Margine", "Margine %", "Notti di pareggio"].map((label) => rows[label][2]));
+  assert.match(await pnl.locator(".rounding").innerText(), /arrotondati all'euro/);
+  // Where the costs go: a bar per cost, the largest first, split between the houses.
+  const costBars = await readCostBars(page);
+  assert.equal(costBars.length, costLabels.length);
+  const drawnAmounts = costBars.map((bar) => amountOf(bar.value));
+  assert.deepEqual(drawnAmounts, [...drawnAmounts].sort((a, b) => b - a), "the largest cost comes first");
+  costBars.forEach((bar, index) => {
+    assert.equal(drawnAmounts[index], rows[bar.label][2], `${bar.label}: the figure beside the bar is the statement's`);
+    assert.ok(Math.abs(bar.drawn - drawnAmounts[index] / drawnAmounts[0]) < 0.02, `${bar.label}: the bar is as long as its share of the largest`);
+    assert.equal(bar.segments, rows[bar.label].slice(0, 2).filter((value) => value > 0).length, `${bar.label}: a segment per house that bears it`);
+    assert.ok(bar.inside && bar.thickness <= 24, `${bar.label}: a thin bar inside its track`);
+  });
+  assert.deepEqual(await pnl.locator(".chart .legend > span").allTextContents(), ["Casa Mare", "Casa Lago"]);
+  assert.equal(await colour(".pnl .seg-bar.p0", "backgroundColor"), "rgb(98, 80, 214)");
+  assert.equal(await colour(".pnl .seg-bar.p1", "backgroundColor"), "rgb(235, 104, 52)");
+  await pnl.locator(".cost").first().hover();
+  await page.waitForSelector(".tip:not([hidden])");
+  const costTip = await page.locator(".tip").innerText();
+  assert.ok(costTip.includes(costBars[0].label) && costTip.includes("Casa Mare") && costTip.includes("Casa Lago"));
+  assert.match(costTip, /\d,\d{2}\s€/, "the readout keeps the cents the statement rounds away");
+  await tablesKeepTheirShape(page, 1);
+  await noSidewaysScroll(page);
+  await shot(page, "06b-pnl-desktop");
+  // Another year of the workbook: its own costs, against that year's bookings.
+  const pnlYears = await pnl.locator(".seg input[name=pnl-year] + span").allInnerTexts();
+  assert.equal(pnlYears.length, 2);
+  assert.ok((await pnl.locator("figcaption").innerText()).endsWith(pnlYears[0]));
+  await pnl.locator(".seg label", { hasText: pnlYears[1] }).click();
+  await page.waitForFunction((year) => document.querySelector(".pnl figcaption").textContent.endsWith(year), pnlYears[1]);
+  const nextYear = await readStatement(page);
+  assert.ok(nextYear.rows["Totale spese"][2] > rows["Totale spese"][2], "the next year's sheet has costs of its own");
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "pnl-year:" + pnlYears[1]);
+  // The page opens on a house: the P&L is a place to go to, not where a device starts from.
+  await page.reload();
+  await page.waitForSelector(".shell");
+  assert.equal(await page.locator(".pnl").count(), 0);
+  assert.equal(await houseShown(page), "Casa Lago");
 
   await page.click("text=Mostra i mesi passati");
   assert.ok((await page.locator(".month.past").count()) >= 1 || new Date().getMonth() === 0);
@@ -547,12 +702,19 @@ async function main() {
   await page.waitForSelector(".tiles");
   assert.equal(await houseShown(page), "Casa Mare", "a device that never chose starts from the first house");
   assert.equal(await page.locator(".house").count(), 1);
+  // On a phone the photo is a band across the top of the card, edge to edge, above the house's name.
+  const band = await housePhoto(page);
+  assert.ok(band.loaded && band.alt === "Foto di Casa Mare");
+  assert.ok(Math.abs(band.box.width - band.card.width) <= 2.5 && Math.abs(band.box.top - band.card.top) <= 1.5, "edge to edge");
+  assert.ok(band.box.height >= 120 && band.box.height <= 180 && band.box.bottom <= band.head.top, "a band above the name");
+  assert.equal(await page.locator(".seg img.thumb").count(), 2);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 4);
+  await tablesKeepTheirShape(page, 3);
   // On the dark surface the same two hues are lighter, and the text on a solid bar is dark.
   const darkColours = await page.evaluate(() => {
     const shade = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
-    return [shade(".house.p0 .swatch", "backgroundColor"), shade(".seg .p1 .swatch", "backgroundColor"),
+    const ring = shade(".seg .p1 .thumb", "boxShadow");
+    return [shade(".house.p0 .swatch", "backgroundColor"), ring.slice(0, ring.indexOf(")") + 1),
       shade(".lane.p0 .bar.booking:not(.past)", "color")];
   });
   assert.deepEqual(darkColours, ["rgb(144, 133, 233)", "rgb(217, 89, 38)", "rgb(11, 11, 11)"]);
@@ -582,7 +744,42 @@ async function main() {
         .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
       if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table of ${house} needs sideways scrolling`);
     }
+    // The monthly statistics have too many columns for a phone, but only just: whole
+    // euros and headings that wrap keep the sideways scrolling short. (With two decimals
+    // and a width fixed per column the first house's table was two screens wide.)
+    const monthlyBox = await page.evaluate(() => {
+      const box = document.querySelector(".kpi-tables .scroll");
+      return { columns: box.querySelectorAll("thead th").length, beyond: box.scrollWidth - box.clientWidth, width: box.clientWidth };
+    });
+    const allowed = monthlyBox.columns <= 8 ? 0.5 : 1; // of a screen
+    assert.ok(monthlyBox.beyond <= allowed * monthlyBox.width,
+      `the monthly statistics of ${house} scroll sideways by ${monthlyBox.beyond}px on a phone`);
   }
+  // The P&L on the same phones: three columns of figures side by side. From 360px up
+  // the statement fits its card; below, it scrolls in its own box like the other tables.
+  await showPnl(page);
+  for (const width of [320, 344, 360, 375, 412, 430, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.waitForTimeout(150);
+    await noSidewaysScroll(page, `at ${width}px (P&L)`);
+    const beyond = await page.evaluate(() => {
+      const box = document.querySelector(".pnl .scroll");
+      return box.scrollWidth - box.clientWidth;
+    });
+    if (width >= 360) assert.ok(beyond <= 0, `at ${width}px the statement needs sideways scrolling (${beyond}px)`);
+  }
+  await tablesKeepTheirShape(page, 1);
+  assert.equal(await colour(".pnl .seg-bar.p0", "backgroundColor"), "rgb(144, 133, 233)");
+  // A tap on a cost opens its readout, house by house; a second tap closes it.
+  const tapped = page.locator(".pnl .cost").nth(1);
+  await tapped.tap();
+  await page.waitForSelector(".tip:not([hidden])");
+  const tappedTip = await page.locator(".tip").innerText();
+  assert.ok(tappedTip.includes("Casa Mare") && tappedTip.includes("Casa Lago"));
+  await tapped.tap();
+  await page.waitForSelector(".tip", { state: "hidden" });
+  await shot(page, "07b-phone-pnl-dark");
+  await showHouse(page, "Casa Mare");
   // A tap on a day opens its sheet; no hover readout is left behind when it closes.
   await page.locator(".day.today").tap();
   await page.waitForSelector("dialog.sheet[open]");

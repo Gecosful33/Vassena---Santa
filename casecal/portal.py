@@ -173,7 +173,8 @@ def read_property(
     reservations: ReservationTable | None = None
     try:
         # The calendar above is what the family relies on. Reservation details
-        # only enrich it, so losing them must not cost the whole house.
+        # only enrich it, so losing them must not cost the whole house. They are
+        # used here and go no further: the snapshot keeps no booking's amounts.
         html = client.page(
             "/reservations",
             "elenco prenotazioni",
@@ -205,9 +206,6 @@ def read_property(
         kpi_roles=yearly[0].roles,
         kpis=[month for kpis in yearly for month in kpis.months],
         kpi_totals=[kpis.total for kpis in yearly if kpis.total is not None],
-        reservation_columns=reservations.columns if reservations else (),
-        reservation_roles=reservations.roles if reservations else {},
-        reservations=reservations.rows if reservations else [],
         check_in_time=prop.check_in,
         check_out_time=prop.check_out,
         portal_url=client.url(f"/property/details/id/{unit.id}"),
