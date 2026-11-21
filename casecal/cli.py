@@ -16,7 +16,7 @@ from .config import (
     load_config,
     missing_secrets,
 )
-from .crypto import PassphraseError, check_passphrases, generate_passphrase
+from .crypto import PassphraseError, check_passphrase, generate_passphrase
 from .errors import SyncAborted
 from .familylog import token_problem
 from .sync import PreviousPage, alert_owner, collect, family_state, previous_from_site, publish
@@ -56,21 +56,21 @@ def _set_output(name: str, value: str) -> None:
 
 
 def _load_settings(config_path: str):
-    """Configuration, credentials and passphrases, validated before any network call."""
+    """Configuration, credentials and the page's passphrase, validated before any network call."""
     config = load_config(config_path)
     missing = missing_secrets(config, os.environ)
     if missing:
         raise ConfigError("secret mancanti: " + ", ".join(missing))
     credentials = {prop.id: credentials_for(prop, os.environ) for prop in config.properties}
-    family, owner = os.environ["FAMILY_PASSPHRASE"], os.environ["OWNER_PASSPHRASE"]
+    passphrase = os.environ["FAMILY_PASSPHRASE"]
     forbidden = [value for cred in credentials.values() for value in (cred.username, cred.password)]
-    check_passphrases(family, owner, forbidden=forbidden)
-    return config, credentials, family, owner
+    check_passphrase(passphrase, forbidden=forbidden)
+    return config, credentials, passphrase
 
 
 def cmd_check(args: argparse.Namespace) -> int:
-    config, credentials, _, _ = _load_settings(args.config)
-    _say(f"configurazione valida: {len(config.properties)} case, {len(credentials) * 3 + 2} secret presenti")
+    config, credentials, _ = _load_settings(args.config)
+    _say(f"configurazione valida: {len(config.properties)} case, {len(credentials) * 3 + 1} secret presenti")
     token = os.environ.get("FAMILY_LOG_TOKEN", "").strip()
     if not token:
         _say("registro di famiglia: non attivo (FAMILY_LOG_TOKEN assente), la pagina resta in sola lettura")
@@ -84,7 +84,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_sync(args: argparse.Namespace) -> int:
     from .portal import fetch_property  # imported late: `check` and `demo` need no scraper
 
-    config, credentials, family, owner = _load_settings(args.config)
+    config, credentials, passphrase = _load_settings(args.config)
     site_url = os.environ.get("SITE_URL", "").strip() or None
     now = datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -93,8 +93,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
     def load_previous() -> PreviousPage:
         # Fetched at most once: both a failed portal and a failed log may need it.
         if not fetched_page:
+            # OWNER_PASSPHRASE: only for a page published when the figures had their own.
             fetched_page.append(
-                previous_from_site(site_url, family_passphrase=family, owner_passphrase=owner)
+                previous_from_site(
+                    site_url,
+                    passphrase=passphrase,
+                    legacy_owner_passphrase=os.environ.get("OWNER_PASSPHRASE", "").strip() or None,
+                )
             )
         return fetched_page[0]
 
@@ -106,7 +111,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
         config,
         token=os.environ.get("FAMILY_LOG_TOKEN", "").strip() or None,
         repository=os.environ.get("GITHUB_REPOSITORY", "").strip() or None,
-        family_passphrase=family,
+        family_passphrase=passphrase,
         old_family_passphrase=os.environ.get("OLD_FAMILY_PASSPHRASE", "").strip() or None,
         load_previous=load_previous,
         api=os.environ.get("GITHUB_API_URL", "").strip() or "https://api.github.com",
@@ -146,8 +151,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
     page = publish(
         snapshot,
-        family_passphrase=family,
-        owner_passphrase=owner,
+        passphrase=passphrase,
         site_id=config.site_id,
         out_dir=args.out,
     )
@@ -157,19 +161,17 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_demo(args: argparse.Namespace) -> int:
-    from .demo import DEMO_FAMILY_PASSPHRASE, DEMO_OWNER_PASSPHRASE, demo_snapshot
+    from .demo import DEMO_PASSPHRASE, demo_snapshot
 
     now = datetime.now(timezone.utc).replace(microsecond=0)
     page = publish(
         demo_snapshot(now, variant=args.variant),
-        family_passphrase=DEMO_FAMILY_PASSPHRASE,
-        owner_passphrase=DEMO_OWNER_PASSPHRASE,
+        passphrase=DEMO_PASSPHRASE,
         site_id="casecal-demo",
         out_dir=args.out,
     )
     _say(f"pagina dimostrativa (dati inventati) scritta in {page}")
-    _say(f"password famiglia:  {DEMO_FAMILY_PASSPHRASE}")
-    _say(f"password proprietà: {DEMO_OWNER_PASSPHRASE}")
+    _say(f"password: {DEMO_PASSPHRASE}")
     return EXIT_OK
 
 

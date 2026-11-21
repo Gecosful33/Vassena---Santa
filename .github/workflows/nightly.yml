@@ -58,8 +58,8 @@ jobs:
       - name: Leggi i portali e costruisci la pagina
         id: sync
         env:
+          # La password della pagina: una sola, apre calendario e conti.
           FAMILY_PASSPHRASE: ${{ secrets.FAMILY_PASSPHRASE }}
-          OWNER_PASSPHRASE: ${{ secrets.OWNER_PASSPHRASE }}
           SANTA_KB_URL: ${{ secrets.SANTA_KB_URL }}
           SANTA_KB_USER: ${{ secrets.SANTA_KB_USER }}
           SANTA_KB_PASS: ${{ secrets.SANTA_KB_PASS }}
@@ -70,10 +70,13 @@ jobs:
           # limitato alle Issues di questo repository (vedi README); senza, la pagina resta
           # in sola lettura. FAMILY_GROUPS elenca le famiglie proposte nel modulo, separate
           # da punto e virgola. OLD_FAMILY_PASSPHRASE serve per una sola esecuzione dopo
-          # aver cambiato la password di famiglia.
+          # aver cambiato la password. OWNER_PASSPHRASE era la password dei soli conti:
+          # ora serve soltanto, se c'è ancora, a rileggere una pagina pubblicata quando le
+          # password erano due; dopo la prima esecuzione riuscita si può eliminare.
           FAMILY_LOG_TOKEN: ${{ secrets.FAMILY_LOG_TOKEN }}
           FAMILY_GROUPS: ${{ secrets.FAMILY_GROUPS }}
           OLD_FAMILY_PASSPHRASE: ${{ secrets.OLD_FAMILY_PASSPHRASE }}
+          OWNER_PASSPHRASE: ${{ secrets.OWNER_PASSPHRASE }}
           # Il token del workflow stesso: apre e commenta la segnalazione per il proprietario.
           # Deve scriverla GitHub Actions, non il proprietario: nessuno riceve notifiche di
           # ciò che fa da sé.

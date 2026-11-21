@@ -274,7 +274,7 @@ class PropertySnapshot:
     # House rules (HH:MM): they come from the configuration, not from the portal.
     check_in_time: str = "15:00"
     check_out_time: str = "11:00"
-    # The page of the manager's portal where the owner closes dates (owner tier only).
+    # The page of the manager's portal where the owner checks the dates (kept with the figures).
     portal_url: str | None = None
     # Non-fatal problems met while reading this house (safe to log); never published.
     warnings: list[str] = field(default_factory=list, compare=False)

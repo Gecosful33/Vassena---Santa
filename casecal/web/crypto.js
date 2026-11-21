@@ -65,21 +65,16 @@ var CaseCalCrypto = (function () {
   }
 
   /**
-   * Try a key against both tiers.
-   * Resolves to { tier, family, owner, familyKey, ownerKey } or null if it opens neither.
-   * The owner blob carries the family key, so the owner key unlocks everything.
+   * Open the page with a key: one key opens everything.
+   * Resolves to { family, owner, key }, or null if the key does not fit. `family` is
+   * the calendar, `owner` the figures: two blobs under the same key (`owner` is null
+   * only if that blob is damaged, and the calendar is shown without the figures).
    */
   async function unlock(envelope, keyBytes) {
     var family = await decryptBlob(keyBytes, envelope.family, AAD_FAMILY);
-    if (family) {
-      return { tier: "family", family: family, owner: null, familyKey: keyBytes, ownerKey: null };
-    }
-    var owner = await decryptBlob(keyBytes, envelope.owner, AAD_OWNER);
-    if (!owner || !owner.family_key) return null;
-    var familyKey = b64ToBytes(owner.family_key);
-    family = await decryptBlob(familyKey, envelope.family, AAD_FAMILY);
     if (!family) return null;
-    return { tier: "owner", family: family, owner: owner, familyKey: familyKey, ownerKey: keyBytes };
+    var owner = await decryptBlob(keyBytes, envelope.owner, AAD_OWNER);
+    return { family: family, owner: owner, key: keyBytes };
   }
 
   /**
@@ -118,12 +113,6 @@ var CaseCalCrypto = (function () {
     return event && typeof event === "object" && !Array.isArray(event) ? event : null;
   }
 
-  /** Decrypt only the owner tier (used when the family view is already open). */
-  async function unlockOwner(envelope, keyBytes) {
-    var owner = await decryptBlob(keyBytes, envelope.owner, AAD_OWNER);
-    return owner && owner.family_key ? owner : null;
-  }
-
   return {
     b64ToBytes: b64ToBytes,
     bytesToB64: bytesToB64,
@@ -131,7 +120,6 @@ var CaseCalCrypto = (function () {
     deriveKey: deriveKey,
     decryptBlob: decryptBlob,
     unlock: unlock,
-    unlockOwner: unlockOwner,
     encodeEvent: encodeEvent,
     decodeEvent: decodeEvent
   };

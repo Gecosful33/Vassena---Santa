@@ -1,7 +1,7 @@
 # Case mostrate nel calendario.
 #
 # Questo file è pubblico: contiene solo i nomi delle case. Indirizzi dei portali,
-# utenti, password e le due passphrase stanno nei secret di GitHub Actions
+# utenti, password e la passphrase della pagina stanno nei secret di GitHub Actions
 # (vedi README), mai qui.
 
 title = "Calendario case"

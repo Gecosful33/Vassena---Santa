@@ -498,7 +498,7 @@ var CaseCalLogic = (function () {
     };
   }
 
-  /* ---- economics (owner tier) ----
+  /* ---- economics (the figures) ----
    * Every manager configures their own amount columns, so a house's owner entry
    * carries the column names (kpi_columns, res_columns), the values row by row,
    * and the index of the few columns the page must recognise (kpi_roles, res_roles).
