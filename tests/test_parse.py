@@ -178,11 +178,11 @@ def test_the_totals_row_is_kept_as_the_portal_states_it():
 
 def test_statistics_with_a_manager_who_publishes_more_columns():
     columns = ("ADR", "PM", "Proprietario", "Imposta", "Addebiti al proprietario", "Netto proprietario")
-    rows = {5: (15, ["688.77", "1995.58", "6183.02", "1298.44", "0", "4884.59"])}
+    rows = {5: (12, ["612.50", "1837.50", "5512.50", "1157.63", "0", "4354.87"])}
     kpis = parse_year_kpis(stats_page(2026, kpi_columns=columns, kpi_rows=rows), 2026, "7")
     assert kpis.columns == columns
     assert kpis.roles == {"adr": 0, "net": 5}
-    assert kpis.months[4].values[5] == Decimal("4884.59")
+    assert kpis.months[4].values[5] == Decimal("4354.87")
     assert kpis.months[4].values[4] == Decimal("0.00")
 
 

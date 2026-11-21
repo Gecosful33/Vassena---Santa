@@ -9,7 +9,7 @@ from casecal.config import Config, PortalCredentials, PropertyConfig
 from casecal.costs import CostLine, CostSheet
 from casecal.crypto import AAD_OWNER, derive_key, encrypt_json, open_envelope
 from casecal.errors import LayoutError, LoginError, SyncAborted
-from casecal.model import MissingProperty, MonthKpi, PropertySnapshot, Reservation, Snapshot, Stay
+from casecal.model import MissingProperty, MonthKpi, PropertySnapshot, Snapshot, Stay
 from casecal.site import extract_envelope
 from casecal.sync import (
     CostsState,
@@ -52,9 +52,6 @@ def house(prop_id: str, fetched_at: datetime = NOW) -> PropertySnapshot:
         kpi_columns=("ADR", "Imposta", "Netto proprietario"),
         kpi_roles={"adr": 0, "net": 2},
         kpis=[MonthKpi(2026, 8, 6, (Decimal("400.00"), Decimal("504.00"), Decimal("1100.00")))],
-        reservation_columns=("Totale pernottamento", "Netto proprietario"),
-        reservation_roles={"gross": 0, "net": 1},
-        reservations=[Reservation(date(2026, 8, 1), date(2026, 8, 7), "Airbnb", 4, (Decimal("2400.00"), Decimal("1100.00")))],
     )
 
 

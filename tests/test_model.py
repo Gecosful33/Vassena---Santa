@@ -44,16 +44,10 @@ def snapshot(**overrides) -> PropertySnapshot:
         kpi_columns=("ADR", "Imposta", "Netto proprietario"),
         kpi_roles={"adr": 0, "net": 2},
         kpis=[
-            MonthKpi(2026, 8, 9, (Decimal("415.87"), Decimal("786.00"), Decimal("1560.52")), 29),
+            MonthKpi(2026, 8, 9, (Decimal("317.45"), Decimal("599.95"), Decimal("1493.61")), 29),
             MonthKpi(2026, 7, 0, (None, None, None)),
         ],
-        kpi_totals=[YearTotal(2026, 9, (Decimal("415.87"), Decimal("786.00"), Decimal("1560.51")), 2)],
-        reservation_columns=("Totale pernottamento", "Netto proprietario"),
-        reservation_roles={"gross": 0, "net": 1},
-        reservations=[
-            Reservation(d("2026-08-07"), d("2026-08-10"), "Airbnb", 4, (Decimal("1247.61"), Decimal("520.17"))),
-            Reservation(d("2026-08-01"), d("2026-08-07"), None, None, (Decimal("2495.22"), Decimal("1040.35"))),
-        ],
+        kpi_totals=[YearTotal(2026, 9, (Decimal("317.45"), Decimal("599.95"), Decimal("1493.60")), 2)],
     )
     values.update(overrides)
     return PropertySnapshot(**values)
@@ -104,7 +98,6 @@ def test_snapshot_sorts_and_validates():
     snap = snapshot()
     assert [s.start for s in snap.stays] == [d("2026-08-01"), d("2026-08-07"), d("2026-09-01")]
     assert [(k.year, k.month) for k in snap.kpis] == [(2026, 7), (2026, 8)]
-    assert [r.check_in for r in snap.reservations] == [d("2026-08-01"), d("2026-08-07")]
     with pytest.raises(DataError):
         snapshot(stays=[Stay(d("2025-12-30"), d("2026-01-02"))])
     with pytest.raises(DataError):
@@ -118,8 +111,6 @@ def test_snapshot_sorts_and_validates():
 def test_rows_must_match_the_columns_they_claim():
     with pytest.raises(DataError, match="KPI row"):
         snapshot(kpis=[MonthKpi(2026, 8, 1, (Decimal("1"),))])
-    with pytest.raises(DataError, match="reservation row"):
-        snapshot(reservations=[Reservation(d("2026-08-01"), d("2026-08-07"), None, None, ())])
     with pytest.raises(DataError, match="KPI totals"):
         snapshot(kpi_totals=[YearTotal(2026, 9, ())])
     with pytest.raises(DataError, match="duplicate year"):
@@ -138,9 +129,9 @@ def test_a_stay_may_end_on_the_last_covered_day():
 
 
 def test_money_is_rounded_half_up_to_cents():
-    assert to_cents(Decimal("259.64")) == 25964
+    assert to_cents(Decimal("123.45")) == 12345
     assert to_cents(Decimal("0.005")) == 1
-    assert to_cents(Decimal("1833.98")) == 183398
+    assert to_cents(Decimal("1987.65")) == 198765
     assert to_cents(None) is None
     with pytest.raises(DataError):
         MonthKpi(2026, 13, 1)
@@ -172,7 +163,7 @@ def test_the_family_payload_carries_no_economics():
         ["2026-09-01", "2026-09-08", "c"],
     ]
     flat = repr(payload)
-    for leaked in ("415", "1560", "1247", "520", "kpis", "reservations", "Netto"):
+    for leaked in ("317", "1493", "599", "kpis", "Netto"):
         assert leaked not in flat
 
 
@@ -181,12 +172,11 @@ def test_the_owner_payload_carries_the_economics_in_cents():
     house = payload["properties"][0]
     assert house["kpi_columns"] == ["ADR", "Imposta", "Netto proprietario"]
     assert house["kpi_roles"] == {"adr": 0, "net": 2}
-    assert house["kpis"][1] == {"y": 2026, "m": 8, "nights": 9, "occ_pct": 29, "vals": [41587, 78600, 156052]}
+    assert house["kpis"][1] == {"y": 2026, "m": 8, "nights": 9, "occ_pct": 29, "vals": [31745, 59995, 149361]}
     assert house["kpis"][0]["vals"] == [None, None, None]
-    assert house["kpi_totals"] == [{"y": 2026, "nights": 9, "occ_pct": 2, "vals": [41587, 78600, 156051]}]
-    assert house["res_columns"] == ["Totale pernottamento", "Netto proprietario"]
-    assert house["res_roles"] == {"gross": 0, "net": 1}
-    assert house["reservations"][1] == ["2026-08-07", "2026-08-10", "Airbnb", 4, [124761, 52017]]
+    assert house["kpi_totals"] == [{"y": 2026, "nights": 9, "occ_pct": 2, "vals": [31745, 59995, 149360]}]
+    # By month and by year, and nothing else: no booking travels with its amounts.
+    assert set(house) == {"id", "portal_url", "kpi_columns", "kpi_roles", "kpis", "kpi_totals"}
 
 
 def test_the_portal_link_is_for_the_owner_only():
@@ -221,7 +211,22 @@ def test_restoring_without_the_owner_tier_keeps_the_calendar():
     published = Snapshot(generated_at=NOW, properties=[original])
     restored = properties_from_payloads(published.family_payload(), None)["santa"]
     assert restored.stays == original.stays
-    assert restored.kpis == [] and restored.reservations == [] and restored.kpi_columns == ()
+    assert restored.kpis == [] and restored.kpi_columns == ()
+
+
+def test_a_page_that_still_lists_its_bookings_one_by_one_is_read_back_without_them():
+    # What the job finds online the first night after the bookings' amounts stopped being published.
+    original = snapshot()
+    published = Snapshot(generated_at=NOW, properties=[original])
+    owner = published.owner_payload()
+    owner["properties"][0].update(
+        res_columns=["Totale pernottamento", "Netto proprietario"],
+        res_roles={"gross": 0, "net": 1},
+        reservations=[["2026-08-07", "2026-08-10", "Airbnb", 4, [120000, 50000]]],
+    )
+    restored = properties_from_payloads(published.family_payload(), owner)["santa"]
+    assert restored == original
+    assert "120000" not in repr(restored.owner_dict()) and "reservations" not in restored.owner_dict()
 
 
 def test_house_hours_travel_with_the_calendar():

@@ -91,7 +91,7 @@
     monthName: dtf({ timeZone: "UTC", month: "long" }),
     monthShort: dtf({ timeZone: "UTC", month: "short" }),
     // Italian omits the thousands separator on four-digit numbers by default; in a
-    // table of amounts "1.350,00" lines up and reads better than "1350,00".
+    // table of amounts "1.250,00" lines up and reads better than "1250,00".
     money: new Intl.NumberFormat(IT, { style: "currency", currency: "EUR", useGrouping: "always" }),
     money0: new Intl.NumberFormat(IT, { style: "currency", currency: "EUR", maximumFractionDigits: 0, useGrouping: "always" }),
     pct: new Intl.NumberFormat(IT, { style: "percent", maximumFractionDigits: 0 }),
@@ -1358,13 +1358,15 @@
       return el("td", { class: columns[i].numeric ? "num" : (columns[i].date ? "date" : null), text: value });
     }));
   }
-  /** A wide table scrolls sideways inside its own box; its first column stays in view. */
+  /**
+   * A table with many columns: as narrow as its figures allow (headings wrap), and where
+   * a phone is narrower still it scrolls sideways inside its own box, first column in view.
+   */
   function wideTable(columns, body, footer) {
     var table = el("table", { class: "rows kpi" },
       el("thead", null, headerRow(columns)),
       body.length ? el("tbody", null, body) : null,
       footer ? el("tfoot", null, footer) : null);
-    table.style.minWidth = (columns.length * 86) + "px";
     return el("div", { class: "scroll" }, table);
   }
 
@@ -1379,13 +1381,16 @@
       columns.push({ name: name, numeric: true });
       if (i === adrAt) columns.push({ name: "Lordo*", numeric: true });
     });
-    if (withRatio) columns.push({ name: "Netto/lordo*", numeric: true });
+    // The hard space keeps the heading to two lines over a column of narrow percentages.
+    if (withRatio) columns.push({ name: "Netto\u00a0su lordo*", numeric: true });
 
+    // Whole euros, and the unit said once under the table: twelve months of several
+    // amounts each have to be read on a phone with as little sideways scrolling as can be.
     function line(label, nightCount, occupancy, vals, gross, net) {
       var out = [label, F.int.format(nightCount), pct(occupancy)];
       vals.forEach(function (value, i) {
-        out.push(euro(value));
-        if (i === adrAt) out.push(euro(gross));
+        out.push(whole(value));
+        if (i === adrAt) out.push(whole(gross));
       });
       if (withRatio) out.push(pct(gross && net !== null ? net / gross : null));
       return out;
@@ -1399,22 +1404,8 @@
             row.occupancy, row.vals, row.gross_cents, row.net_cents), row.nights ? null : "zero");
         }),
         bodyRow(columns, line("Totale " + year, total.nights, total.occupancy, total.vals, total.gross_cents, total.net_cents))),
-      withGross ? el("p", { class: "hint", text: "* calcolato: lordo = notti × ADR" }) : null
-    ];
-  }
-
-  /**
-   * What the bookings checked in during the year add up to, in the columns the portal
-   * lists. The bookings themselves are in the stays of each house, without amounts.
-   */
-  function reservationTotals(year, entry) {
-    var data = L.yearReservations(entry.owner, year);
-    if (!data.rows.length) return null;
-    var columns = [{ name: "" }, { name: "Notti", numeric: true }];
-    (entry.owner.res_columns || []).forEach(function (name) { columns.push({ name: name, numeric: true }); });
-    return [
-      el("h4", { text: "Prenotazioni con check-in nel " + year + " (" + data.rows.length + ")" }),
-      wideTable(columns, [], bodyRow(columns, ["Totale", F.int.format(data.nights)].concat(data.totals.map(euro))))
+      el("p", { class: "hint", text: "Importi in euro, arrotondati all'unità: il totale può differire di poco dalla somma dei mesi." +
+        (withGross ? " * Calcolato: lordo = notti × ADR." : "") })
     ];
   }
 
@@ -1458,7 +1449,7 @@
       el("div", { class: "kpi-tables" }, series.map(function (entry) {
         return el("div", { class: "p" + entry.prop.index },
           el("h3", null, el("i", { class: "swatch" }), entry.prop.label),
-          kpiTable(year, entry), reservationTotals(year, entry));
+          kpiTable(year, entry));
       }))
     ]);
     return section;

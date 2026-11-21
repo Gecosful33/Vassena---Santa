@@ -412,7 +412,7 @@ async function main() {
   assert.match(await page.textContent(".stays thead"), /Check-indalle 15:00Check-outentro le 11:00/);
   assert.equal(await page.locator(".day.today").count(), 1);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 4); // guests to come, stays, monthly statistics and reservation totals of the house
+  await tablesKeepTheirShape(page, 3); // guests to come, stays and monthly statistics of the house
 
   // The card of the house says who is there and who is coming next: no free periods, no blocked dates.
   const card = await page.locator(".house").innerText();
@@ -432,7 +432,7 @@ async function main() {
   await allGuests.click();
   assert.ok((await guestRows.count()) > 4, "the whole list on request");
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "guests:mare", "focus stays on the toggle");
-  await tablesKeepTheirShape(page, 4);
+  await tablesKeepTheirShape(page, 3);
   await page.locator('[data-key="guests:mare"]').click();
   assert.equal(await guestRows.count(), 4);
 
@@ -499,25 +499,26 @@ async function main() {
   assert.match(await figures(page).innerText(), /Casa Mare · anno \d{4}/);
   assert.equal(await page.locator(".tile").count(), 6);
   assert.equal(await page.locator(".kpi-tables h4", { hasText: "Statistiche mensili" }).count(), 1);
-  assert.equal(await page.locator(".kpi-tables h4", { hasText: "Prenotazioni con check-in" }).count(), 1);
-  const headers = await page.locator(".kpi-tables table").first().locator("thead th").allTextContents();
-  assert.deepEqual(headers, ["Mese", "Notti", "Occ.", "ADR", "Lordo*", "Imposta", "Netto proprietario", "Netto/lordo*"]);
-  const monthNames = await page.locator(".kpi-tables table").first().locator("tbody td:first-child").allTextContents();
+  const monthly = page.locator(".kpi-tables table").first();
+  const headers = await monthly.locator("thead th").allTextContents();
+  assert.deepEqual(headers.map((name) => name.replace(/\u00a0/g, " ")),
+    ["Mese", "Notti", "Occ.", "ADR", "Lordo*", "Imposta", "Netto proprietario", "Netto su lordo*"]);
+  const monthNames = await monthly.locator("tbody td:first-child").allTextContents();
   assert.deepEqual([monthNames.length, monthNames[0], monthNames[11]], [12, "Gennaio", "Dicembre"]);
-  assert.match(await page.locator(".kpi-tables table").first().locator("tfoot").innerText(), /^Totale \d{4}\s/);
-  // The bookings of the year are summed up in one row, not listed one by one.
-  const totals = page.locator(".kpi-tables > div").first().locator("table").nth(1);
+  assert.match(await monthly.locator("tfoot").innerText(), /^Totale \d{4}\s/);
+  // Its amounts are whole euros with the unit said once below: fewer characters, less to scroll on a phone.
+  const monthlyCells = await monthly.locator("tbody td.num, tfoot td.num").allTextContents();
+  assert.equal(monthlyCells.length, 13 * 7);
+  for (const cell of monthlyCells) assert.match(cell, /^(\d{1,3}(\.\d{3})*|\d+%|–)$/, `"${cell}" is not a whole number`);
+  assert.ok(monthlyCells.some((cell) => /^\d{1,3}\.\d{3}$/.test(cell)), "thousands are grouped");
+  assert.match(await page.locator(".kpi-tables .hint").innerText(), /Importi in euro, arrotondati all'unità.*lordo = notti × ADR/);
+  // Nothing else among the figures: the year's bookings are neither listed nor summed up
+  // (what the houses earned and cost is the P&L's business).
   assert.equal(await page.locator(".kpi-tables > div").count(), 1);
-  assert.equal(await page.locator(".kpi-tables > div").first().locator("table").count(), 2);
-  assert.deepEqual(await totals.evaluate((table) => [...table.children].map((group) => group.tagName + ":" + group.rows.length)),
-    ["THEAD:1", "TFOOT:1"]);
-  assert.deepEqual(await totals.locator("thead th").allTextContents(),
-    ["", "Notti", "Totale pernottamento", "Imposta", "Commissioni gestore", "Commissioni OTA", "Netto proprietario"]);
-  const totalCells = await totals.locator("tfoot td").allTextContents();
-  assert.equal(totalCells[0], "Totale");
-  assert.match(totalCells[1], /^\d+$/);
-  for (const amount of totalCells.slice(2)) assert.match(amount, /^[\d.]+,\d{2}\s€$/);
-  assert.ok(!/Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()), "no booking is listed among the figures");
+  assert.equal(await page.locator(".kpi-tables table").count(), 1);
+  assert.equal(await page.locator(".kpi-tables h4").count(), 1);
+  assert.ok(!/Prenotazioni con check-in|Check-in|Check-out/.test(await page.locator(".kpi-tables").innerText()),
+    "no booking is listed or totalled among the figures");
   assert.ok((await page.locator(".col").count()) > 0, "monthly chart drawn");
   await page.locator(".group").nth(7).hover();
   await page.waitForSelector(".tip:not([hidden])");
@@ -550,7 +551,7 @@ async function main() {
   await page.waitForFunction(() => /Uso famiglia: Famiglia Bianchi \(da far bloccare al gestore\)/.test(document.querySelector(".tip").textContent));
   assert.match(await figures(page).innerText(), /Casa Lago · anno \d{4}/);
   assert.equal(await page.locator(".tile").count(), 6);
-  await tablesKeepTheirShape(page, 4);
+  await tablesKeepTheirShape(page, 3);
   await noSidewaysScroll(page);
   await shot(page, "06-second-house-desktop");
 
@@ -668,7 +669,7 @@ async function main() {
   assert.equal(await houseShown(page), "Casa Mare", "a device that never chose starts from the first house");
   assert.equal(await page.locator(".house").count(), 1);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 4);
+  await tablesKeepTheirShape(page, 3);
   // On the dark surface the same two hues are lighter, and the text on a solid bar is dark.
   const darkColours = await page.evaluate(() => {
     const shade = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
@@ -702,6 +703,16 @@ async function main() {
         .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
       if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table of ${house} needs sideways scrolling`);
     }
+    // The monthly statistics have too many columns for a phone, but only just: whole
+    // euros and headings that wrap keep the sideways scrolling short. (With two decimals
+    // and a width fixed per column the first house's table was two screens wide.)
+    const monthlyBox = await page.evaluate(() => {
+      const box = document.querySelector(".kpi-tables .scroll");
+      return { columns: box.querySelectorAll("thead th").length, beyond: box.scrollWidth - box.clientWidth, width: box.clientWidth };
+    });
+    const allowed = monthlyBox.columns <= 8 ? 0.5 : 1; // of a screen
+    assert.ok(monthlyBox.beyond <= allowed * monthlyBox.width,
+      `the monthly statistics of ${house} scroll sideways by ${monthlyBox.beyond}px on a phone`);
   }
   // The P&L on the same phones: three columns of figures side by side. From 360px up
   // the statement fits its card; below, it scrolls in its own box like the other tables.

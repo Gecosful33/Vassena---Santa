@@ -22,12 +22,10 @@ from .model import (
     BOOKING,
     CLOSED,
     ROLE_ADR,
-    ROLE_GROSS,
     ROLE_NET,
     MissingProperty,
     MonthKpi,
     PropertySnapshot,
-    Reservation,
     Snapshot,
     Stay,
     YearTotal,
@@ -85,10 +83,9 @@ def _house(
     with_guests: bool,
     manager_fee: Decimal,
 ) -> PropertySnapshot:
-    """One invented house whose statistics are the pro-rata of its reservations."""
+    """One invented house whose statistics are the pro-rata of its bookings."""
     rng = random.Random(seed)
     detailed: list[Stay] = []
-    reservations: list[Reservation] = []
     # month -> [nights, gross, tax, fee, net]
     monthly: dict[tuple[int, int], list[Decimal]] = {}
     for stay in stays:
@@ -103,10 +100,6 @@ def _house(
         fee = (gross * manager_fee).quantize(_CENT)
         tax = ((gross - ota - fee) * Decimal("0.21")).quantize(_CENT)
         net = gross - ota - fee - tax
-        if with_guests:
-            reservations.append(Reservation(stay.start, stay.end, channel, guests, (gross, tax, fee, ota, net)))
-        else:
-            reservations.append(Reservation(stay.start, stay.end, channel, guests, (gross, ota, net)))
         for night in _nights(stay):
             bucket = monthly.setdefault((night.year, night.month), [Decimal(0)] * 5)
             for index, amount in enumerate((Decimal(1), Decimal(_SEASON_RATE[night.month]), tax, fee, net)):
@@ -137,10 +130,8 @@ def _house(
 
     if with_guests:
         kpi_columns = ("ADR", "Imposta", "Netto proprietario")
-        res_columns = ("Totale pernottamento", "Imposta", "Commissioni gestore", "Commissioni OTA", "Netto proprietario")
     else:
         kpi_columns = ("ADR", "PM", "Proprietario", "Imposta", "Netto proprietario")
-        res_columns = ("Totale pernottamento", "Commissioni OTA", "Tot proprietario")
     return PropertySnapshot(
         id=prop_id,
         label=label,
@@ -153,9 +144,6 @@ def _house(
         kpi_roles={ROLE_ADR: 0, ROLE_NET: len(kpi_columns) - 1},
         kpis=kpis,
         kpi_totals=totals,
-        reservation_columns=res_columns,
-        reservation_roles={ROLE_GROSS: 0, ROLE_NET: len(res_columns) - 1},
-        reservations=reservations,
     )
 
 

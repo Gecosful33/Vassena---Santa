@@ -5,8 +5,7 @@ notte dai portali proprietari dei gestori (Krossbooking) e pubblicata cifrata.
 
 - **Una sola password** apre la pagina. Chi ce l'ha vede, una casa alla volta, quando
   arrivano i prossimi ospiti, il calendario con le date occupate, bloccate e libere, e
-  i conti: ricavi, commissioni e netto, mese per mese e in totale sulle prenotazioni
-  dell'anno.
+  i conti: ricavi, trattenute e netto, mese per mese e in totale sull'anno.
 - **Chiunque abbia la password** può segnare dalla pagina chi usa una casa e quando, e
   correggere o togliere quanto già segnato: lo vedono subito tutti, e per ogni periodo
   la pagina dice se quelle date sono davvero bloccate sul portale del gestore.
@@ -198,7 +197,7 @@ casa alla volta e ogni dispositivo ricorda l'ultima scelta.
 | Calendario | soggiorni degli ospiti, date bloccate e periodi della famiglia |
 | «Chi usa la casa» | periodi della famiglia, inseribili e modificabili da tutti |
 | Soggiorni e blocchi | elenco con canale e numero di ospiti |
-| Area proprietà | date che la famiglia conta di usare ma ancora in vendita, con il link al portale; statistiche mensili, grafico del netto, totali delle prenotazioni dell'anno |
+| Area proprietà | date che la famiglia conta di usare ma ancora in vendita, con il link al portale; riquadri di sintesi dell'anno, grafico del netto, statistiche mensili |
 
 Se il P&L è attivo (passo 7), dopo le schede delle case c'è il tasto «P&L»: riguarda
 tutte le case insieme, per l'anno scelto.
@@ -238,7 +237,8 @@ Tre stati, con lo stesso nome ovunque:
   bloccare le date.
 
 I nomi degli ospiti e le nazionalità non vengono mai letti dal portale: il programma
-estrae solo date, canale, numero di ospiti e colonne di importi.
+estrae solo date, canale, numero di ospiti e colonne di importi. Gli importi delle
+singole prenotazioni non lasciano il job: nella pagina i conti sono per mese e per anno.
 
 **Soggiorni propri registrati come prenotazioni.** Alcuni gestori inseriscono i
 soggiorni dei proprietari come prenotazioni a importo zero invece che come date
@@ -301,7 +301,18 @@ Le modifiche degli altri arrivano quando si riapre la pagina o si torna sulla sc
 
 Gli importi sono quelli dei portali, con le colonne che ciascun gestore ha
 configurato (possono differire da casa a casa). Le uniche grandezze calcolate sono
-marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
+marcate con un asterisco: lordo = notti × ADR, e il rapporto netto su lordo.
+
+Nella tabella delle statistiche mensili gli importi sono in euro interi, senza simbolo
+(lo dice la riga sotto la tabella): le colonne sono molte e su un telefono ogni
+carattere in meno è scorrimento laterale in meno. Ogni cifra è arrotondata per conto
+proprio, quindi il totale dell'anno può differire di poco dalla somma dei mesi; i
+riquadri sopra il grafico restano al centesimo.
+
+I conti sono per mese e per anno. Le singole prenotazioni non sono elencate né
+sommate, e i loro importi non vengono pubblicati: il job legge l'elenco del portale
+solo per dare a ogni soggiorno il canale e il numero di ospiti, e per riconoscere le
+prenotazioni a importo zero.
 
 ### Come si legge il P&L
 
@@ -404,7 +415,7 @@ viene verificata e, al primo dubbio, scartata:
   *room nights* della tabella statistiche;
 - i totali dichiarati dal portale devono tornare con la somma dei mesi.
 
-L'elenco prenotazioni arricchisce il calendario (canale, ospiti, importi) ma non lo
+L'elenco prenotazioni arricchisce il calendario (canale e numero di ospiti) ma non lo
 condiziona: se non si legge, il calendario viene pubblicato comunque e il job segnala
 il problema.
 

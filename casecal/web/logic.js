@@ -500,8 +500,9 @@ var CaseCalLogic = (function () {
 
   /* ---- economics (the figures) ----
    * Every manager configures their own amount columns, so a house's owner entry
-   * carries the column names (kpi_columns, res_columns), the values row by row,
-   * and the index of the few columns the page must recognise (kpi_roles, res_roles).
+   * carries the column names of its monthly statistics (kpi_columns), the values row
+   * by row, and the index of the few columns the page must recognise (kpi_roles).
+   * No amount of a single booking is published: the figures are by month and by year.
    */
 
   function roleIndex(roles, name) {
@@ -513,7 +514,6 @@ var CaseCalLogic = (function () {
     var years = {};
     ownerProps.forEach(function (p) {
       (p.kpis || []).forEach(function (k) { years[k.y] = true; });
-      (p.reservations || []).forEach(function (r) { years[+r[0].slice(0, 4)] = true; });
     });
     return Object.keys(years).map(Number).sort(function (a, b) { return a - b; });
   }
@@ -613,25 +613,6 @@ var CaseCalLogic = (function () {
       net_cents: net,
       net_ratio: gross && net !== null ? net / gross : null
     };
-  }
-
-  /** Reservations of one house whose check-in falls in `year`, with column totals. */
-  function yearReservations(owner, year) {
-    var columns = owner.res_columns || [];
-    var rows = (owner.reservations || []).filter(function (r) {
-      return +r[0].slice(0, 4) === year;
-    }).map(function (r) {
-      var start = dayFromYmd(r[0]), end = dayFromYmd(r[1]);
-      return { start: start, end: end, nights: end - start, channel: r[2], guests: r[3], vals: r[4] };
-    });
-    var totals = columns.map(function (_, i) {
-      var sum = 0, any = false;
-      rows.forEach(function (row) { if (known(row.vals[i])) { sum += row.vals[i]; any = true; } });
-      return any ? sum : null;
-    });
-    var nights = 0;
-    rows.forEach(function (row) { nights += row.nights; });
-    return { rows: rows, totals: totals, nights: nights };
   }
 
   /** A "nice" axis maximum and step for values in euro cents. */
@@ -755,7 +736,7 @@ var CaseCalLogic = (function () {
     entryStatus: entryStatus, checkEntry: checkEntry, entryId: entryId, MAX_NIGHTS: MAX_NIGHTS,
     firstOpenDay: firstOpenDay, draftPeriod: draftPeriod,
     kpiYears: kpiYears, yearRows: yearRows, columnTotals: columnTotals, houseYear: houseYear, combine: combine,
-    yearReservations: yearReservations, roleIndex: roleIndex, axisScale: axisScale,
+    roleIndex: roleIndex, axisScale: axisScale,
     costSheets: costSheets, coveredYears: coveredYears, profitAndLoss: profitAndLoss
   };
 })();

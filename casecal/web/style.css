@@ -433,6 +433,13 @@ button, input { font: inherit; color: inherit; }
 .kpi th:first-child, .kpi td:first-child { position: sticky; left: 0; background: var(--surface-1); }
 .kpi tr.zero td { color: var(--text-muted); }
 .kpi tfoot td { font-weight: 650; border-top: 1px solid var(--axis); border-bottom: 0; }
+/* Figures stay on one line; a heading longer than its figures wraps instead of widening the column. */
+.kpi thead th, .kpi thead .num { white-space: normal; vertical-align: bottom; }
+/* On a phone every pixel of width is one less to scroll. */
+@media (max-width: 480px) {
+  .kpi { font-size: 13px; }
+  .kpi .num { padding-right: 8px; }
+}
 
 /* ---------- profit and loss ---------- */
 .pnl .tiles { margin-top: 8px; }

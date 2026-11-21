@@ -559,15 +559,15 @@ function owner(kpis, extra = {}) {
 
 test("year rows rebuild gross as nights x ADR and occupancy on calendar days", () => {
   const rows = L.yearRows(owner([
-    { y: 2026, m: 6, nights: 14, occ_pct: 47, vals: [25964, 76335, 184103] },
+    { y: 2026, m: 6, nights: 12, occ_pct: 40, vals: [24150, 60858, 171342] },
     { y: 2027, m: 6, nights: 3, occ_pct: 10, vals: [10000, 0, 0] }
   ]), 2026);
   assert.equal(rows.length, 12);
   const june = rows[5];
-  assert.equal(june.gross_cents, 14 * 25964);
-  assert.equal(june.net_cents, 184103);
-  assert.deepEqual(june.vals, [25964, 76335, 184103]);
-  assert.ok(Math.abs(june.occupancy - 14 / 30) < 1e-12);
+  assert.equal(june.gross_cents, 12 * 24150);
+  assert.equal(june.net_cents, 171342);
+  assert.deepEqual(june.vals, [24150, 60858, 171342]);
+  assert.ok(Math.abs(june.occupancy - 12 / 30) < 1e-12);
   assert.equal(rows[0].nights, 0);
   assert.equal(rows[0].gross_cents, null);
   assert.deepEqual(rows[0].vals, [null, null, null]);
@@ -601,19 +601,19 @@ test("a house's year uses the portal's own totals when it lists them", () => {
 });
 
 test("houses whose managers publish different columns still add up", () => {
-  const first = L.houseYear(owner([{ y: 2026, m: 5, nights: 2, vals: [25000, 10500, 27300] }]), 2026);
+  const first = L.houseYear(owner([{ y: 2026, m: 5, nights: 2, vals: [24000, 10080, 26240] }]), 2026);
   const second = L.houseYear({
     kpi_columns: ["ADR", "PM", "Proprietario", "Imposta", "Addebiti al proprietario", "Netto proprietario"],
     kpi_roles: { adr: 0, net: 5 },
-    kpis: [{ y: 2026, m: 5, nights: 15, vals: [68877, 199558, 618302, 129844, 0, 488459] }]
+    kpis: [{ y: 2026, m: 5, nights: 12, vals: [61250, 183750, 551250, 115763, 0, 435487] }]
   }, 2026);
   const total = L.combine([first, second], 2026);
-  assert.equal(total.nights, 17);
-  assert.equal(total.net_cents, 27300 + 488459);
-  assert.equal(total.gross_cents, 2 * 25000 + 15 * 68877);
-  assert.equal(total.adr_cents, Math.round((2 * 25000 + 15 * 68877) / 17)); // weighted by nights
-  assert.ok(Math.abs(total.occupancy - 17 / 730) < 1e-12); // two houses, 365 days each
-  assert.ok(Math.abs(total.net_ratio - (27300 + 488459) / (2 * 25000 + 15 * 68877)) < 1e-12);
+  assert.equal(total.nights, 14);
+  assert.equal(total.net_cents, 26240 + 435487);
+  assert.equal(total.gross_cents, 2 * 24000 + 12 * 61250);
+  assert.equal(total.adr_cents, Math.round((2 * 24000 + 12 * 61250) / 14)); // weighted by nights
+  assert.ok(Math.abs(total.occupancy - 14 / 730) < 1e-12); // two houses, 365 days each
+  assert.ok(Math.abs(total.net_ratio - (26240 + 435487) / (2 * 24000 + 12 * 61250)) < 1e-12);
 });
 
 test("a house without recognisable ADR or net column yields no gross and no net", () => {
@@ -643,31 +643,10 @@ test("column totals add amounts and weight the daily rate by nights", () => {
   assert.deepEqual(L.columnTotals(rows, 3, null), [50000, 12600, 11000]); // no rate role: plain sums
 });
 
-test("reservations are listed by check-in year with their column totals", () => {
-  const house = owner([], {
-    res_columns: ["Totale pernottamento", "Commissioni OTA", "Netto proprietario"],
-    res_roles: { gross: 0, net: 2 },
-    reservations: [
-      ["2026-05-30", "2026-06-02", "Airbnb", 4, [75000, 11250, 36000]],
-      ["2026-12-31", "2027-01-03", "Diretta", null, [51300, null, 18960]],
-      ["2027-02-10", "2027-02-12", "Booking", 2, [30000, 4500, 14000]]
-    ]
-  });
-  const year = L.yearReservations(house, 2026);
-  assert.equal(year.rows.length, 2); // the New Year booking belongs to its check-in year
-  assert.equal(year.nights, 6);
-  assert.deepEqual(year.totals, [126300, 11250, 54960]);
-  assert.deepEqual([year.rows[0].channel, year.rows[0].guests, year.rows[0].nights], ["Airbnb", 4, 3]);
-  assert.equal(year.rows[1].guests, null);
-  assert.deepEqual(L.yearReservations(house, 2025), { rows: [], totals: [null, null, null], nights: 0 });
-  assert.deepEqual(L.yearReservations(owner([]), 2026), { rows: [], totals: [], nights: 0 });
-});
-
-test("the years on offer cover statistics and reservations alike", () => {
-  const house = owner([{ y: 2026, m: 1, nights: 0, vals: [null, null, null] }], {
-    reservations: [["2027-02-10", "2027-02-12", "Booking", 2, []]]
-  });
+test("the years on offer are those of the monthly statistics, of any house", () => {
+  const house = owner([{ y: 2026, m: 1, nights: 0, vals: [null, null, null] }, { y: 2027, m: 2, nights: 2, vals: [1, 1, 1] }]);
   assert.deepEqual(L.kpiYears([house, owner([{ y: 2025, m: 3, nights: 1, vals: [1, 1, 1] }])]), [2025, 2026, 2027]);
+  assert.deepEqual(L.kpiYears([owner([])]), []);
   assert.deepEqual(L.kpiYears([]), []);
 });
 
@@ -678,10 +657,10 @@ test("a stay keeps the channel and guest count the portal lists", () => {
 });
 
 test("axis scale picks round euro ticks that cover the maximum", () => {
-  assert.deepEqual(L.axisScale(364123), { max: 400000, ticks: [0, 100000, 200000, 300000, 400000] });
-  const small = L.axisScale(27300);
+  assert.deepEqual(L.axisScale(357500), { max: 400000, ticks: [0, 100000, 200000, 300000, 400000] });
+  const small = L.axisScale(31500);
   assert.equal(small.ticks[0], 0);
-  assert.ok(small.max >= 27300);
+  assert.ok(small.max >= 31500);
   assert.ok(small.ticks.length <= 6);
 });
 
