@@ -646,6 +646,103 @@ var CaseCalLogic = (function () {
     return { max: ticks[ticks.length - 1], ticks: ticks };
   }
 
+  /* ---- profit and loss ----
+   * Income is what the portals report for the year. Costs are the yearly amounts the
+   * owner keeps in a spreadsheet, one sheet per year (owner.costs): a list of lines,
+   * each with an amount per house in cents, or nothing where it does not apply.
+   */
+
+  /** The cost sheets worth showing, oldest year first. Anything malformed is left out. */
+  function costSheets(costs) {
+    return (Array.isArray(costs) ? costs : []).filter(function (sheet) {
+      return sheet && typeof sheet.year === "number" && Array.isArray(sheet.lines) && sheet.lines.length;
+    }).sort(function (a, b) { return a.year - b.year; });
+  }
+
+  /**
+   * The years every one of these houses is read for from its portal, whole: 1 January
+   * to 31 December. Only for those can a year's income be set against its costs: a
+   * year the portals are no longer (or not yet) read for would show an income of nothing.
+   */
+  function coveredYears(props) {
+    var houses = props.filter(function (prop) { return !prop.missing; });
+    if (!houses.length) return [];
+    var first = Math.max.apply(null, houses.map(function (prop) { return prop.from; }));
+    var last = Math.min.apply(null, houses.map(function (prop) { return prop.to; }));
+    var years = [];
+    for (var year = parts(first).y; dayOf(year + 1, 1, 1) <= last; year++) {
+      if (dayOf(year, 1, 1) >= first) years.push(year);
+    }
+    return years;
+  }
+
+  /**
+   * The year's result, house by house and all together.
+   * `ownerProps` are the houses' figures (the readable ones, in page order) and
+   * `sheet` the cost sheet of that year.
+   *
+   * Returns { houses: [column], total: column, lines: [{ label, note, amounts, total }] }.
+   * A column holds: nights, adr_cents, gross_cents, withheld_cents (what the manager,
+   * the channels and the flat tax keep: gross less net) with withheld_ratio, net_cents,
+   * costs_cents, margin_cents (net less costs) with margin_ratio (of the net), and
+   * breakeven_nights: how many nights at this year's net per night pay the costs.
+   * In a line, `amounts` follow the houses; null says the cost does not apply there.
+   */
+  function profitAndLoss(ownerProps, sheet, year) {
+    var lines = ((sheet && sheet.lines) || []).map(function (line) {
+      var amounts = ownerProps.map(function (prop) {
+        var value = line && line.amounts ? line.amounts[prop.id] : null;
+        return typeof value === "number" && isFinite(value) ? value : null;
+      });
+      var total = null;
+      amounts.forEach(function (value) { if (value !== null) total = (total || 0) + value; });
+      return {
+        label: typeof line.label === "string" ? line.label : "",
+        note: typeof line.note === "string" ? line.note : "",
+        amounts: amounts, total: total
+      };
+    }).filter(function (line) { return line.total !== null; });
+
+    function column(figures, costs) {
+      var nights = figures.nights || 0, gross = figures.gross_cents, net = figures.net_cents;
+      var withheld = known(gross) && known(net) ? gross - net : null;
+      var margin = known(net) ? net - costs : null;
+      var perNight = known(net) && nights > 0 ? net / nights : null;
+      return {
+        nights: nights,
+        adr_cents: known(gross) && nights > 0 ? Math.round(gross / nights) : null,
+        gross_cents: known(gross) ? gross : null,
+        withheld_cents: withheld,
+        withheld_ratio: withheld !== null && gross > 0 ? withheld / gross : null,
+        net_cents: known(net) ? net : null,
+        costs_cents: costs,
+        margin_cents: margin,
+        margin_ratio: margin !== null && net > 0 ? margin / net : null,
+        // Whole nights, and never the "-0" that rounding up a hair under nothing gives.
+        breakeven_nights: perNight !== null && perNight > 0 ? Math.max(0, Math.ceil(costs / perNight - 1e-9)) : null
+      };
+    }
+
+    // A house that sold no night that year earned nothing: its costs are a loss, not a
+    // blank. One whose portal publishes no such column at all stays unknown.
+    var years = ownerProps.map(function (prop) {
+      var house = houseYear(prop, year);
+      function or0(value, role) {
+        return known(value) ? value : (!house.nights && roleIndex(prop.kpi_roles, role) !== null ? 0 : null);
+      }
+      return { nights: house.nights, gross_cents: or0(house.gross_cents, "adr"), net_cents: or0(house.net_cents, "net") };
+    });
+    var houses = years.map(function (figures, i) {
+      var costs = 0;
+      lines.forEach(function (line) { costs += line.amounts[i] || 0; });
+      return column(figures, costs);
+    });
+    var all = combine(years, year);
+    var allCosts = 0;
+    houses.forEach(function (house) { allCosts += house.costs_cents; });
+    return { houses: houses, total: column(all, allCosts), lines: lines };
+  }
+
   return {
     DAY_MS: DAY_MS,
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
@@ -658,7 +755,8 @@ var CaseCalLogic = (function () {
     entryStatus: entryStatus, checkEntry: checkEntry, entryId: entryId, MAX_NIGHTS: MAX_NIGHTS,
     firstOpenDay: firstOpenDay, draftPeriod: draftPeriod,
     kpiYears: kpiYears, yearRows: yearRows, columnTotals: columnTotals, houseYear: houseYear, combine: combine,
-    yearReservations: yearReservations, roleIndex: roleIndex, axisScale: axisScale
+    yearReservations: yearReservations, roleIndex: roleIndex, axisScale: axisScale,
+    costSheets: costSheets, coveredYears: coveredYears, profitAndLoss: profitAndLoss
   };
 })();
 if (typeof module !== "undefined" && module.exports) { module.exports = CaseCalLogic; }

@@ -684,3 +684,127 @@ test("axis scale picks round euro ticks that cover the maximum", () => {
   assert.ok(small.max >= 27300);
   assert.ok(small.ticks.length <= 6);
 });
+
+/* ---- profit and loss: the portals' income against the owner's sheet of running costs ---- */
+
+const COSTS = {
+  year: 2026, updated: "2026-09-01",
+  lines: [
+    { label: "IMU", amounts: { mare: 120000, lago: 300000 }, note: "stima" },
+    { label: "Spese condominiali", amounts: { mare: 90000, lago: null }, note: "" },
+    { label: "Giardiniere", amounts: { mare: null, lago: 150050 } }
+  ]
+};
+const MARE = { id: "mare", ...owner([
+  { y: 2026, m: 7, nights: 10, vals: [30000, 0, 180000] },
+  { y: 2026, m: 8, nights: 20, vals: [36000, 0, 432000] }
+]) };
+const LAGO = { id: "lago", ...owner([{ y: 2026, m: 8, nights: 15, vals: [40000, 0, 400000] }]) };
+
+test("the year's result sets each house's net income against its costs", () => {
+  const result = L.profitAndLoss([MARE, LAGO], COSTS, 2026);
+  const [mare, lago] = result.houses;
+  assert.deepEqual(
+    [mare.nights, mare.adr_cents, mare.gross_cents, mare.withheld_cents, mare.net_cents, mare.costs_cents, mare.margin_cents],
+    [30, 34000, 1020000, 408000, 612000, 210000, 402000]);
+  assert.ok(Math.abs(mare.withheld_ratio - 0.4) < 1e-12);            // of the gross
+  assert.ok(Math.abs(mare.margin_ratio - 402000 / 612000) < 1e-12);  // of the net
+  assert.equal(mare.breakeven_nights, 11);                           // 2,100 at 204 a night: 10.3 nights
+  // The second house costs more than it earns: the loss is shown as one.
+  assert.deepEqual([lago.net_cents, lago.costs_cents, lago.margin_cents, lago.breakeven_nights], [400000, 450050, -50050, 17]);
+  assert.ok(lago.margin_ratio < 0);
+  // All together: amounts add up, the daily rate is weighted by nights.
+  const total = result.total;
+  assert.deepEqual(
+    [total.nights, total.adr_cents, total.gross_cents, total.withheld_cents, total.net_cents, total.costs_cents, total.margin_cents],
+    [45, 36000, 1620000, 608000, 1012000, 660050, 351950]);
+  assert.equal(total.breakeven_nights, 30);
+  assert.equal(total.margin_cents, mare.margin_cents + lago.margin_cents);
+});
+
+test("the costs are listed house by house, with a blank where one does not apply", () => {
+  const result = L.profitAndLoss([MARE, LAGO], COSTS, 2026);
+  assert.deepEqual(result.lines, [
+    { label: "IMU", note: "stima", amounts: [120000, 300000], total: 420000 },
+    { label: "Spese condominiali", note: "", amounts: [90000, null], total: 90000 },
+    { label: "Giardiniere", note: "", amounts: [null, 150050], total: 150050 }
+  ]);
+  // In the order of the houses on the page, whatever the order in the sheet.
+  assert.deepEqual(L.profitAndLoss([LAGO, MARE], COSTS, 2026).lines[0].amounts, [300000, 120000]);
+  // One house on its own: the other's costs are not its own, and a cost that is only the other's goes.
+  const alone = L.profitAndLoss([MARE], COSTS, 2026);
+  assert.deepEqual(alone.lines.map((line) => [line.label, line.total]), [["IMU", 120000], ["Spese condominiali", 90000]]);
+  assert.equal(alone.total.costs_cents, 210000);
+  assert.equal(alone.total.margin_cents, alone.houses[0].margin_cents);
+});
+
+test("the nights that pay the costs are counted whole", () => {
+  // 600 of net over 3 nights is 200 a night: 2,000 of costs take exactly 10, 2,000.01 take 11.
+  const house = { id: "mare", ...owner([{ y: 2026, m: 8, nights: 3, vals: [30000, 0, 60000] }]) };
+  const costing = (cents) => L.profitAndLoss([house], { year: 2026, lines: [{ label: "Voce", amounts: { mare: cents } }] }, 2026);
+  assert.equal(costing(200000).total.breakeven_nights, 10);
+  assert.equal(costing(200001).total.breakeven_nights, 11);
+  assert.equal(costing(0).total.breakeven_nights, 0);
+});
+
+test("a house that sold nothing in the year shows its costs as a loss", () => {
+  const idle = { id: "lago", ...owner([]) };
+  const result = L.profitAndLoss([MARE, idle], COSTS, 2026);
+  const lago = result.houses[1];
+  assert.deepEqual([lago.nights, lago.gross_cents, lago.net_cents, lago.withheld_cents, lago.margin_cents], [0, 0, 0, 0, -450050]);
+  // Nothing to divide by: no rate, no share, no count of nights.
+  assert.deepEqual([lago.adr_cents, lago.withheld_ratio, lago.margin_ratio, lago.breakeven_nights], [null, null, null, null]);
+  assert.equal(result.total.margin_cents, 612000 - 660050);
+  // Another year of the same houses: no income at all, the costs remain.
+  const next = L.profitAndLoss([MARE, idle], COSTS, 2027);
+  assert.deepEqual([next.total.nights, next.total.net_cents, next.total.margin_cents, next.total.breakeven_nights], [0, 0, -660050, null]);
+});
+
+test("a house whose portal publishes no net income has no result, only costs", () => {
+  const opaque = { id: "lago", kpi_columns: ["Incasso"], kpi_roles: {}, kpis: [] };
+  const result = L.profitAndLoss([opaque], COSTS, 2026);
+  const lago = result.houses[0];
+  assert.deepEqual([lago.gross_cents, lago.net_cents, lago.withheld_cents, lago.margin_cents, lago.margin_ratio], [null, null, null, null, null]);
+  assert.equal(lago.costs_cents, 450050);
+});
+
+test("a cost sheet with odd content is read for what it is worth", () => {
+  const odd = { year: 2026, lines: [
+    { label: "Buona", amounts: { mare: 100 } },
+    { label: "Senza importi" },
+    { label: 7, amounts: { mare: "12", lago: NaN } },
+    { label: "Di un'altra casa", amounts: { altrove: 500 } }
+  ] };
+  assert.deepEqual(L.profitAndLoss([MARE], odd, 2026).lines, [{ label: "Buona", note: "", amounts: [100], total: 100 }]);
+  assert.deepEqual(L.profitAndLoss([MARE], null, 2026).lines, []);
+  assert.equal(L.profitAndLoss([MARE], undefined, 2026).total.costs_cents, 0);
+});
+
+test("the cost sheets on offer are the usable ones, oldest year first", () => {
+  const sheets = L.costSheets([
+    { year: 2027, lines: [{ label: "IMU", amounts: {} }] },
+    { year: 2026, lines: [] },                 // nothing in it
+    null,
+    { year: "2025", lines: [{ label: "IMU" }] }, // not a year
+    { year: 2025, lines: [{ label: "IMU", amounts: {} }] }
+  ]);
+  assert.deepEqual(sheets.map((sheet) => sheet.year), [2025, 2027]);
+  assert.deepEqual(L.costSheets(undefined), []);
+  assert.deepEqual(L.costSheets({ year: 2026 }), []);
+});
+
+test("a year's result needs every house read for the whole of that year", () => {
+  const both = [house([], "2026-01-01", "2028-01-01"), house([], "2026-01-01", "2028-01-01")];
+  assert.deepEqual(L.coveredYears(both), [2026, 2027]);
+  // A house left behind by its portal narrows the years to those they share.
+  assert.deepEqual(L.coveredYears([house([], "2026-01-01", "2028-01-01"), house([], "2027-01-01", "2029-01-01")]), [2027]);
+  assert.deepEqual(L.coveredYears([house([], "2026-01-01", "2027-01-01"), house([], "2027-01-01", "2028-01-01")]), []);
+  // Part of a year is not the year.
+  assert.deepEqual(L.coveredYears([house([], "2026-03-01", "2027-12-31")]), []);
+  assert.deepEqual(L.coveredYears([house([], "2026-03-01", "2028-01-01")]), [2027]);
+  // A house that could not be read at all does not count; with none, no year does.
+  const missing = L.prepare({ id: "x", label: "X", missing: true });
+  assert.deepEqual(L.coveredYears([missing, house([], "2026-01-01", "2027-01-01")]), [2026]);
+  assert.deepEqual(L.coveredYears([missing]), []);
+  assert.deepEqual(L.coveredYears([]), []);
+});

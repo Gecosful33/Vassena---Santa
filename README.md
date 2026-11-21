@@ -10,6 +10,9 @@ notte dai portali proprietari dei gestori (Krossbooking) e pubblicata cifrata.
 - **Chiunque abbia la password** può segnare dalla pagina chi usa una casa e quando, e
   correggere o togliere quanto già segnato: lo vedono subito tutti, e per ogni periodo
   la pagina dice se quelle date sono davvero bloccate sul portale del gestore.
+- **Il tasto «P&L»** (facoltativo) mette i ricavi netti letti dai portali a confronto con
+  le spese annue di ciascuna casa, tenute in un foglio Excel privato: margine, incidenza
+  delle trattenute, notti di pareggio.
 
 La pagina è raggiungibile da chiunque, ma contiene solo testo cifrato: senza password
 non si legge nulla, nemmeno i nomi delle case.
@@ -22,6 +25,7 @@ ogni notte (GitHub Actions, 02:17 UTC)
      → elenco prenotazioni → logout
   └─ controlli di coerenza (vedi sotto)
   └─ rilettura delle voci inserite dalla famiglia (registro cifrato, vedi sotto)
+  └─ lettura del foglio delle spese da un bucket privato (facoltativo: è il P&L)
   └─ cifratura → una sola pagina HTML → GitHub Pages
 
 durante il giorno (nel browser di chi apre la pagina)
@@ -120,6 +124,69 @@ chiunque altro; senza questo secret il nome si scrive a mano. Sta in un secret e
 `properties.toml` perché il repository è pubblico: i nomi viaggiano solo nella parte
 cifrata della pagina.
 
+### 7. Attivare il P&L (facoltativo)
+
+Il P&L mette a confronto le entrate lette dai portali con le spese annue di ciascuna
+casa. Le spese stanno in un foglio Excel che deve restare privato, e questo repository
+è pubblico: il file sta quindi in un bucket privato di Cloudflare R2, da cui il job
+notturno lo scarica con una chiave di sola lettura.
+
+**Il file.** Una cartella di lavoro `.xlsx` con un foglio per anno, che ha per nome
+l'anno (`2026`). In ogni foglio:
+
+- una riga di intestazione che inizia con `Voce` e nomina le case, una per colonna,
+  fino alla colonna `Totale`. Una colonna è di una casa se la sua intestazione inizia
+  con il nome che la casa ha in `properties.toml`, o viceversa (`Santa Margherita`
+  vale per `Santa`);
+- una riga `SPESE` e, sotto, una spesa per riga: il nome, l'importo annuo in euro per
+  ciascuna casa (`n.a.` o cella vuota dove la spesa non si applica) e, a destra del
+  totale, una nota facoltativa;
+- una riga il cui nome inizia con `Totale` (per esempio `Totale Spese`), che chiude
+  l'elenco. Il totale scritto lì serve da controllo: se non coincide con la somma
+  delle voci lette, il job lo segnala;
+- facoltativa, una cella `Data Aggiornamento` con la data nella cella sotto: la pagina
+  la riporta come ultima revisione.
+
+Tutto il resto viene ignorato, comprese le righe delle entrate (quelle la pagina le
+prende ogni notte dai portali) e i fogli con un altro nome. Il file va salvato da
+Excel, o da un programma che salvi anche il risultato delle formule.
+
+**Il bucket e la chiave.**
+
+1. Su [dash.cloudflare.com](https://dash.cloudflare.com), menu `R2 object storage`.
+   Alla prima apertura R2 va attivato e chiede un metodo di pagamento; un file e una
+   lettura per notte restano nella fascia gratuita (10 GB e 10 milioni di letture al
+   mese).
+2. `Create bucket`, con un nome a piacere (per esempio `case-private`). Un bucket nasce
+   privato: non vanno attivati né l'accesso pubblico (`r2.dev`) né un dominio.
+3. Dentro il bucket, `Upload`, e caricare il file.
+4. In `R2 object storage → Overview`, riquadro `Account Details`: `Manage` accanto ad
+   `API Tokens`, poi `Create Account API token` (o `Create User API token`: per un
+   account personale è lo stesso).
+5. Permesso **`Object Read only`**, limitato a quel solo bucket (nella stessa schermata
+   si sceglie a quali bucket si applica). La scadenza è a scelta: quando arriva, il job
+   segnala che la chiave è rifiutata e basta crearne una nuova.
+6. Creare il token e copiare **Access Key ID** e **Secret Access Key**: Cloudflare li
+   mostra una volta sola.
+7. Nel repository, `Settings → Secrets and variables → Actions`, tre secret:
+
+   | Nome | Valore |
+   |---|---|
+   | `COSTS_R2_URL` | `https://<account>.r2.cloudflarestorage.com/<bucket>/<file>` |
+   | `COSTS_R2_ACCESS_KEY_ID` | l'Access Key ID |
+   | `COSTS_R2_SECRET_ACCESS_KEY` | la Secret Access Key |
+
+   `<account>` è l'Account ID che Cloudflare mostra in `Account Details`; lo stesso
+   indirizzo, fino al nome del bucket, è l'«S3 API» nelle impostazioni del bucket. Il
+   nome del file va scritto com'è, spazi compresi. Per un bucket creato con
+   giurisdizione europea l'indirizzo è `https://<account>.eu.r2.cloudflarestorage.com/…`.
+8. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare `spese: lette` e
+   nella pagina, dopo le schede delle case, il tasto «P&L».
+
+Per aggiornare le spese basta ricaricare il file nel bucket con lo stesso nome: la
+pagina le prende alla lettura notturna successiva. Se una notte il file non si scarica
+o non si legge, la pagina tiene le spese già pubblicate e il job lo segnala.
+
 ## Cosa mostra la pagina
 
 Con la password si vede tutto. In alto c'è una scheda per casa: la pagina mostra una
@@ -132,6 +199,15 @@ casa alla volta e ogni dispositivo ricorda l'ultima scelta.
 | «Chi usa la casa» | periodi della famiglia, inseribili e modificabili da tutti |
 | Soggiorni e blocchi | elenco con canale e numero di ospiti |
 | Area proprietà | date che la famiglia conta di usare ma ancora in vendita, con il link al portale; statistiche mensili, grafico del netto, totali delle prenotazioni dell'anno |
+
+Se il P&L è attivo (passo 7), dopo le schede delle case c'è il tasto «P&L»: riguarda
+tutte le case insieme, per l'anno scelto.
+
+| Parte | Contenuto |
+|---|---|
+| Riquadri | ricavi netti, spese annue, margine, margine % e notti di pareggio dell'insieme delle case |
+| Prospetto | una colonna per casa e una di totale: entrate (ADR, notti vendute, ricavi lordi, trattenute, ricavi netti), spese voce per voce, risultato |
+| «Dove vanno le spese» | una barra per voce, dalla più pesante, divisa fra le case; toccandola, il dettaglio per casa e la nota scritta nel foglio |
 
 ### Come si legge il calendario
 
@@ -227,6 +303,32 @@ Gli importi sono quelli dei portali, con le colonne che ciascun gestore ha
 configurato (possono differire da casa a casa). Le uniche grandezze calcolate sono
 marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
 
+### Come si legge il P&L
+
+- **Entrate**: quelle dei portali per l'anno, le stesse dell'area proprietà. Per l'anno
+  in corso sono le prenotazioni acquisite finora, quindi crescono durante l'anno; le
+  spese sono invece gli importi dell'anno intero.
+- **Ricavi lordi** = notti × ADR. **Trattenute** = lordi − netti, cioè quanto resta a
+  gestore, canali e fisco, con la sua incidenza sul lordo. **Ricavi netti** = il netto
+  proprietario dei portali.
+- **Margine** = ricavi netti − spese. **Margine %** = margine sui ricavi netti.
+- **Notti di pareggio** = le notti che servono a coprire le spese, al netto medio per
+  notte dell'anno (spese ÷ netto per notte, arrotondato per eccesso). Accanto ci sono
+  le notti vendute.
+- Gli importi sono arrotondati all'euro, ciascuno per conto proprio: un totale può
+  differire di 1 € dalla somma delle sue voci. Restano al centesimo l'ADR e il
+  dettaglio che compare toccando una barra.
+- Il P&L si calcola per gli anni che il job legge dai portali, cioè quello in corso e
+  il successivo: da gennaio il foglio dell'anno appena chiuso non ha più entrate con
+  cui confrontarsi, e la pagina dice quale foglio manca. Una casa che quella notte non
+  è stata letta resta fuori dal conto, e la pagina lo dice.
+- Notti e ADR sono quelli delle statistiche del portale. Dove il gestore registra i
+  soggiorni dei proprietari come prenotazioni a importo zero, quelle notti contano come
+  vendute (vedi sopra): abbassano l'ADR e il netto per notte, e quindi alzano le notti
+  di pareggio. Il margine non ne risente.
+- Le note scritte nel foglio accanto alle spese compaiono nella pagina: le legge
+  chiunque abbia la password.
+
 ## Sicurezza: cosa è protetto e cosa no
 
 - **Cifratura.** Chiavi derivate con PBKDF2-HMAC-SHA256 (600.000 iterazioni), contenuti
@@ -252,6 +354,11 @@ marcate con un asterisco: lordo = notti × ADR, e il rapporto netto/lordo.
 - **Segnalazione al proprietario.** La issue «Date da far bloccare al gestore» è
   pubblica e dice solo che c'è qualcosa da guardare. Il job la scrive con il token del
   workflow, a cui per questo è concesso il permesso `issues: write`.
+- **Foglio delle spese.** Il file sta in un bucket privato, fuori dal repository. Il job
+  lo scarica con una chiave che può soltanto leggere quel bucket; nella pagina arrivano,
+  cifrati insieme ai conti, solo i nomi delle spese, gli importi e le note. Il browser
+  non contatta mai Cloudflare. Nei log un errore indica al massimo il foglio e il numero
+  di riga, mai un nome o un importo.
 
 Limiti da conoscere:
 
@@ -262,6 +369,9 @@ Limiti da conoscere:
 - Le credenziali dei portali stanno nei secret di GitHub: chi ha accesso in scrittura
   al repository può farle uscire modificando un workflow. Tenere il repository
   personale e l'account GitHub protetto da autenticazione a due fattori.
+- La chiave di R2 sta nei secret come le credenziali dei portali, con gli stessi limiti.
+  Può solo leggere il bucket indicato: se trapela espone il file delle spese e
+  nient'altro. Si revoca da Cloudflare (`API Tokens`) e se ne crea una nuova.
 - Il token del registro viaggia dentro la pagina cifrata: chi ha la password può
   estrarlo. Con il solo permesso Issues su questo
   repository può creare, modificare e cancellare issue e commenti a nome del
@@ -298,6 +408,13 @@ L'elenco prenotazioni arricchisce il calendario (canale, ospiti, importi) ma non
 condiziona: se non si legge, il calendario viene pubblicato comunque e il job segnala
 il problema.
 
+Lo stesso vale per il foglio delle spese, che non condiziona mai il calendario. Un
+importo che non è un numero, una formula senza risultato, un'intestazione che
+corrisponde a due case o un elenco senza la riga di chiusura fanno scartare il file:
+la pagina tiene le spese già pubblicate e il job lo segnala. Un totale scritto nel
+foglio che non coincide con la somma delle voci viene segnalato, e la pagina usa la
+somma delle voci.
+
 ## Quando qualcosa non va
 
 **La pagina avvisa da sola.**
@@ -327,10 +444,23 @@ il problema.
 | `N voci del registro di famiglia non si aprono con la password attuale` | password cambiata | impostare `OLD_FAMILY_PASSPHRASE` per un'esecuzione |
 | `FAMILY_GROUPS: …` | un nome ripetuto, troppo lungo, o più di 8 nomi | correggere il secret: la pagina usa intanto i nomi validi |
 | `avviso al proprietario non aggiornato (…)` | GitHub ha rifiutato la scrittura della segnalazione | controllare che il workflow abbia ancora `issues: write`; l'elenco nella pagina resta corretto |
+| `spese non lette (chiave rifiutata, …)` | chiave di R2 sbagliata, scaduta o non valida per quel bucket | ripetere i punti 4–7 del passo 7 |
+| `spese non lette (file non trovato: …)` | bucket o file con un nome diverso da quello in `COSTS_R2_URL`, anche solo per una maiuscola; oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'indirizzo | correggere il secret, o ricaricare il file con il nome atteso |
+| `spese non lette (COSTS_R2_URL non valido: …)` | indirizzo incompleto, pubblico (`r2.dev`) o con parametri in coda | usare la forma indicata al passo 7 |
+| `spese non lette (servono tutti e tre i secret …)` | manca uno dei tre secret | completare il passo 7 |
+| `spese non lette (il file non è una cartella di lavoro Excel …)` | caricato un `.xls`, un `.csv` o un file danneggiato | salvare come `.xlsx` e ricaricare |
+| `spese non lette (foglio 2026, riga 14: …)` | in una cella di importo c'è del testo, o una formula senza risultato | correggere quella riga (`n.a.` è ammesso) e ricaricare |
+| `spese non lette (foglio 2026: non trovo …)` | manca la riga `Voce`, la riga `SPESE` o quella che inizia con `Totale` | ripristinare la struttura del passo 7 |
+| `foglio 2026: il totale delle spese scritto nel foglio non è la somma delle voci` | la formula del totale non comprende tutte le righe | correggere la formula; la pagina usa comunque la somma delle voci |
+| `foglio 2026: una colonna non corrisponde a nessuna casa` / `manca la colonna della casa …` | intestazione diversa dal nome della casa | rinominare la colonna |
 
 Quando il registro non si legge, la pagina viene pubblicata lo stesso con le voci già
 note e il job risulta fallito, così arriva la mail. Finché il token non funziona la
 famiglia non può inserire né modificare periodi.
+
+Anche un problema con il foglio delle spese fa risultare il job fallito, dopo aver
+pubblicato la pagina: il calendario è aggiornato, il P&L mostra le spese dell'ultima
+lettura riuscita.
 
 **Schedule disattivato.** GitHub spegne i workflow schedulati dei repository pubblici
 dopo 60 giorni senza attività. Il job si riabilita da solo a ogni esecuzione; se
@@ -369,7 +499,7 @@ node tests/e2e/smoke.js dist-demo
 
 Altri comandi: `python -m casecal check` verifica configurazione e secret senza
 toccare la rete; `python -m casecal sync --out dist` esegue la lettura reale (servono
-le variabili d'ambiente del passo 1).
+le variabili d'ambiente del passo 1, e quelle del passo 7 per il P&L).
 
 | File | Ruolo |
 |---|---|
@@ -381,15 +511,18 @@ le variabili d'ambiente del passo 1).
 | `casecal/family.py` | voci della famiglia: validazione, eventi cifrati, ricostruzione dello stato |
 | `casecal/familylog.py` | registro di famiglia su GitHub: lettura notturna e impostazioni per la pagina |
 | `casecal/alerts.py` | segnalazione al proprietario delle date da far bloccare |
+| `casecal/costs.py` | foglio Excel delle spese → voci per casa, con i suoi controlli |
+| `casecal/r2.py` | lettura del file dal bucket privato: una richiesta firmata, in sola lettura |
 | `casecal/sync.py` | orchestrazione notturna e recupero dell'ultimo stato valido |
 | `casecal/site.py` | assemblaggio della pagina unica e della sua CSP |
 | `casecal/web/` | la pagina: decifratura, logica del calendario, registro (`store.js`), interfaccia |
 | `tests/portal_html.py` | pagine sintetiche con la stessa struttura del portale |
 | `tests/github_fake.py` | controfigura dell'API di GitHub usata dal registro e dalla segnalazione |
+| `tests/workbooks.py` | fogli di spese inventati, nel formato che il job si aspetta |
 | `tests/fixtures/entry_status.json` | casi su cui job notturno e pagina devono dare lo stesso stato a un periodo |
 
 Questo repository è pubblico: nei test non devono mai entrare pagine scaricate dai
-portali, nomi, indirizzi o importi veri.
+portali, nomi, indirizzi o importi veri, né il foglio delle spese o le sue cifre.
 
 ### Aggiungere una casa
 

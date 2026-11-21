@@ -280,6 +280,47 @@ async function main() {
   const houseShown = (page) => page.locator(".house h3").innerText();
   const figures = (page) => page.locator("section.card", { hasText: "Area proprietà" });
 
+  /* ---- helpers for the profit and loss ---- */
+  /** The tab after the houses: the profit and loss of all of them. */
+  async function showPnl(page) {
+    await press(page, page.locator(".seg label", { hasText: /^P&L$/ }));
+    await page.waitForSelector("section.pnl .statement");
+  }
+  /** "18.235 €", "226,90", "38,1%" -> a number. */
+  const amountOf = (text) => Number(text.replace(/[^\d,-]/g, "").replace(",", "."));
+  /**
+   * The statement as numbers. `rows` maps each line to its cells (a house each, then
+   * all of them), null where a cell holds no figure; `order` lists [part, line].
+   */
+  const readStatement = (page) => page.evaluate(() => {
+    const own = (cell) => [...cell.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE)
+      .map((node) => node.textContent).join("").trim();
+    const number = (text) => (/\d/.test(text) ? Number(text.replace(/[^\d,-]/g, "").replace(",", ".")) : null);
+    const rows = {}, order = [];
+    let part = "";
+    for (const row of document.querySelectorAll(".pnl .statement tbody tr")) {
+      if (row.classList.contains("part")) { part = row.textContent; continue; }
+      const label = own(row.querySelector("th"));
+      rows[label] = [...row.querySelectorAll("td")].map((cell) => number(own(cell)));
+      order.push([part, label]);
+    }
+    return { rows, order };
+  });
+  /** The chart of the costs as drawn: a bar per cost, a segment per house that bears it. */
+  const readCostBars = (page) => page.locator(".pnl .cost").evaluateAll((nodes) => nodes.map((node) => {
+    const track = node.querySelector(".track").getBoundingClientRect();
+    const segments = [...node.querySelectorAll(".seg-bar")].map((segment) => segment.getBoundingClientRect());
+    return {
+      label: [...node.querySelector(".cost-name").childNodes].filter((child) => child.nodeType === Node.TEXT_NODE)
+        .map((child) => child.textContent).join(""),
+      value: node.querySelector(".cost-value").firstChild.textContent,
+      drawn: segments.reduce((sum, box) => sum + box.width, 0) / track.width,
+      thickness: Math.max(...segments.map((box) => box.height)),
+      segments: segments.length,
+      inside: segments.every((box) => box.left >= track.left - 0.5 && box.right <= track.right + 0.5)
+    };
+  }));
+
   /* ---- helpers for the family's entries ---- */
   const names = (page) => page.locator(".people .entry-who strong").allTextContents();
   const sorted = (list) => [...list].sort();
@@ -349,7 +390,8 @@ async function main() {
   await page.click("button[type=submit]");
   await page.waitForSelector(".shell");
   // A tab for each house and none for all of them together; the first house is on show.
-  assert.deepEqual(await page.locator(".seg input[name=house] + span").allInnerTexts(), ["Casa Mare", "Casa Lago"]);
+  // After the houses, the profit and loss: the demo knows what they cost.
+  assert.deepEqual(await page.locator(".seg input[name=house] + span").allInnerTexts(), ["Casa Mare", "Casa Lago", "P&L"]);
   assert.equal(await houseShown(page), "Casa Mare");
   assert.equal(await page.locator(".house").count(), 1);
   assert.equal(await page.locator(".months.single").count(), 1);
@@ -512,6 +554,84 @@ async function main() {
   await noSidewaysScroll(page);
   await shot(page, "06-second-house-desktop");
 
+  // The profit and loss: what the houses earned, what they cost, what is left.
+  await showPnl(page);
+  assert.equal(await page.locator(".house, .months, .people").count(), 0, "the P&L takes the place of the house's own view");
+  const pnl = page.locator("section.pnl");
+  assert.deepEqual(await pnl.locator(".tile .label").allTextContents(),
+    ["Ricavi netti", "Spese annue", "Margine", "Margine %", "Notti di pareggio"]);
+  // The statement: a column per house and one for both.
+  assert.deepEqual(await pnl.locator(".statement thead th").allTextContents(), ["Voce", "Casa Mare", "Casa Lago", "Totale"]);
+  assert.deepEqual(await pnl.locator(".statement tr.part").allTextContents(), ["Entrate", "Spese", "Risultato"]);
+  const { rows, order } = await readStatement(page);
+  assert.deepEqual(order.filter(([part]) => part !== "Spese").map(([, label]) => label),
+    ["ADR medio", "Notti vendute", "Ricavi lordi", "Trattenute", "Ricavi netti", "Margine", "Margine %", "Notti di pareggio"]);
+  const costLabels = order.filter(([part, label]) => part === "Spese" && label !== "Totale spese").map(([, label]) => label);
+  assert.ok(costLabels.length >= 10, "the costs are listed one by one");
+  assert.equal(order[order.findIndex(([, label]) => label === "Totale spese") + 1][0], "Risultato", "their total closes the list");
+  for (const label of costLabels) {
+    const [mare, lago, both] = rows[label];
+    assert.equal((mare || 0) + (lago || 0), both, `${label}: the total is the sum of the houses`);
+  }
+  assert.ok(costLabels.some((label) => rows[label][0] === null) && costLabels.some((label) => rows[label][1] === null),
+    "a cost of one house only is blank for the other");
+  assert.equal(await pnl.locator(".statement td", { hasText: /^n\.a\.$/ }).count(), 2);
+  for (const column of [0, 1, 2]) {
+    const listed = costLabels.reduce((sum, label) => sum + (rows[label][column] || 0), 0);
+    assert.equal(rows["Totale spese"][column], listed, "the costs add up, column by column");
+    // Each figure is rounded to the euro on its own: a difference of one is rounding, more is a mistake.
+    assert.ok(Math.abs(rows["Ricavi lordi"][column] - rows["Trattenute"][column] - rows["Ricavi netti"][column]) <= 1);
+    assert.ok(Math.abs(rows["Ricavi netti"][column] - rows["Totale spese"][column] - rows["Margine"][column]) <= 1);
+    assert.ok(rows["Notti di pareggio"][column] > 0 && Number.isInteger(rows["Notti di pareggio"][column]));
+  }
+  assert.equal(rows["Notti vendute"][0] + rows["Notti vendute"][1], rows["Notti vendute"][2]);
+  assert.ok(Math.abs(rows["Ricavi netti"][0] + rows["Ricavi netti"][1] - rows["Ricavi netti"][2]) <= 1);
+  assert.ok(Math.abs(rows["Margine"][0] + rows["Margine"][1] - rows["Margine"][2]) <= 1);
+  // The headline figures are the statement's column for both houses.
+  const headline = await pnl.locator(".tile").evaluateAll((tiles) => Object.fromEntries(tiles.map((tile) =>
+    [tile.querySelector(".label").textContent, tile.querySelector(".value").textContent])));
+  assert.match(headline["Ricavi netti"], /^[\d.]+\s€$/);
+  assert.deepEqual(
+    ["Ricavi netti", "Spese annue", "Margine", "Margine %", "Notti di pareggio"].map((label) => amountOf(headline[label])),
+    ["Ricavi netti", "Totale spese", "Margine", "Margine %", "Notti di pareggio"].map((label) => rows[label][2]));
+  assert.match(await pnl.locator(".rounding").innerText(), /arrotondati all'euro/);
+  // Where the costs go: a bar per cost, the largest first, split between the houses.
+  const costBars = await readCostBars(page);
+  assert.equal(costBars.length, costLabels.length);
+  const drawnAmounts = costBars.map((bar) => amountOf(bar.value));
+  assert.deepEqual(drawnAmounts, [...drawnAmounts].sort((a, b) => b - a), "the largest cost comes first");
+  costBars.forEach((bar, index) => {
+    assert.equal(drawnAmounts[index], rows[bar.label][2], `${bar.label}: the figure beside the bar is the statement's`);
+    assert.ok(Math.abs(bar.drawn - drawnAmounts[index] / drawnAmounts[0]) < 0.02, `${bar.label}: the bar is as long as its share of the largest`);
+    assert.equal(bar.segments, rows[bar.label].slice(0, 2).filter((value) => value > 0).length, `${bar.label}: a segment per house that bears it`);
+    assert.ok(bar.inside && bar.thickness <= 24, `${bar.label}: a thin bar inside its track`);
+  });
+  assert.deepEqual(await pnl.locator(".chart .legend > span").allTextContents(), ["Casa Mare", "Casa Lago"]);
+  assert.equal(await colour(".pnl .seg-bar.p0", "backgroundColor"), "rgb(98, 80, 214)");
+  assert.equal(await colour(".pnl .seg-bar.p1", "backgroundColor"), "rgb(235, 104, 52)");
+  await pnl.locator(".cost").first().hover();
+  await page.waitForSelector(".tip:not([hidden])");
+  const costTip = await page.locator(".tip").innerText();
+  assert.ok(costTip.includes(costBars[0].label) && costTip.includes("Casa Mare") && costTip.includes("Casa Lago"));
+  assert.match(costTip, /\d,\d{2}\s€/, "the readout keeps the cents the statement rounds away");
+  await tablesKeepTheirShape(page, 1);
+  await noSidewaysScroll(page);
+  await shot(page, "06b-pnl-desktop");
+  // Another year of the workbook: its own costs, against that year's bookings.
+  const pnlYears = await pnl.locator(".seg input[name=pnl-year] + span").allInnerTexts();
+  assert.equal(pnlYears.length, 2);
+  assert.ok((await pnl.locator("figcaption").innerText()).endsWith(pnlYears[0]));
+  await pnl.locator(".seg label", { hasText: pnlYears[1] }).click();
+  await page.waitForFunction((year) => document.querySelector(".pnl figcaption").textContent.endsWith(year), pnlYears[1]);
+  const nextYear = await readStatement(page);
+  assert.ok(nextYear.rows["Totale spese"][2] > rows["Totale spese"][2], "the next year's sheet has costs of its own");
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "pnl-year:" + pnlYears[1]);
+  // The page opens on a house: the P&L is a place to go to, not where a device starts from.
+  await page.reload();
+  await page.waitForSelector(".shell");
+  assert.equal(await page.locator(".pnl").count(), 0);
+  assert.equal(await houseShown(page), "Casa Lago");
+
   await page.click("text=Mostra i mesi passati");
   assert.ok((await page.locator(".month.past").count()) >= 1 || new Date().getMonth() === 0);
 
@@ -583,6 +703,31 @@ async function main() {
       if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table of ${house} needs sideways scrolling`);
     }
   }
+  // The P&L on the same phones: three columns of figures side by side. From 360px up
+  // the statement fits its card; below, it scrolls in its own box like the other tables.
+  await showPnl(page);
+  for (const width of [320, 344, 360, 375, 412, 430, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.waitForTimeout(150);
+    await noSidewaysScroll(page, `at ${width}px (P&L)`);
+    const beyond = await page.evaluate(() => {
+      const box = document.querySelector(".pnl .scroll");
+      return box.scrollWidth - box.clientWidth;
+    });
+    if (width >= 360) assert.ok(beyond <= 0, `at ${width}px the statement needs sideways scrolling (${beyond}px)`);
+  }
+  await tablesKeepTheirShape(page, 1);
+  assert.equal(await colour(".pnl .seg-bar.p0", "backgroundColor"), "rgb(144, 133, 233)");
+  // A tap on a cost opens its readout, house by house; a second tap closes it.
+  const tapped = page.locator(".pnl .cost").nth(1);
+  await tapped.tap();
+  await page.waitForSelector(".tip:not([hidden])");
+  const tappedTip = await page.locator(".tip").innerText();
+  assert.ok(tappedTip.includes("Casa Mare") && tappedTip.includes("Casa Lago"));
+  await tapped.tap();
+  await page.waitForSelector(".tip", { state: "hidden" });
+  await shot(page, "07b-phone-pnl-dark");
+  await showHouse(page, "Casa Mare");
   // A tap on a day opens its sheet; no hover readout is left behind when it closes.
   await page.locator(".day.today").tap();
   await page.waitForSelector("dialog.sheet[open]");
