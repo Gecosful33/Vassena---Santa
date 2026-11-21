@@ -20,10 +20,12 @@ from .config import Config, PortalCredentials, PropertyConfig
 from .crypto import EnvelopeError, build_envelope, derive_key, open_envelope, site_salt
 from .errors import PortalError, SyncAborted
 from .family import FamilyEntry, FamilyError, ordered
+from .alerts import needing_action, reconcile
 from .familylog import (
     DEFAULT_API,
     FamilyLogError,
     FamilyState,
+    GitHubIssues,
     GitHubLog,
     read_family_state,
     token_problem,
@@ -214,6 +216,55 @@ def family_state(
         known_houses={prop.id for prop in config.properties},
         fallback=keep_published,
     )
+
+
+def alert_owner(
+    config: Config,
+    snapshot: Snapshot,
+    report: SyncReport,
+    family: FamilyState,
+    *,
+    token: str | None,
+    repository: str | None,
+    owner: str | None,
+    load_previous: PreviousLoader,
+    now: datetime,
+    api: str = DEFAULT_API,
+) -> tuple[str | None, str | None]:
+    """Keep the owner's alert in line with tonight's calendar (see ``alerts.py``).
+
+    Returns what was done with the alert and, separately, what went wrong.
+    Nothing is done unless the family's log was read in this very run: entries
+    carried over from the page online are too old a basis to write to someone.
+    """
+    if not token or not repository or not family.fresh:
+        return None, None
+    today = now.astimezone(ZoneInfo(config.timezone)).date()
+    # Only the houses read tonight without a hitch: a period of any other house proves nothing.
+    houses = {
+        prop.id: prop
+        for prop in snapshot.properties
+        if prop.id in report.fresh and prop.id not in report.warnings
+    }
+    previous_entries = previous_houses = None
+    if needing_action(family.entries, houses, today):
+        previous = load_previous()
+        if previous.properties:  # an empty page is one that could not be read back
+            previous_entries, previous_houses = previous.entries, previous.properties
+    try:
+        outcome = reconcile(
+            GitHubIssues(token, repository, api=api),
+            owner=owner or "",
+            entries=family.entries,
+            houses=houses,
+            previous_entries=previous_entries,
+            previous_houses=previous_houses,
+            today=today,
+            complete=len(houses) == len(config.properties),
+        )
+    except FamilyLogError as exc:
+        return None, f"avviso al proprietario non aggiornato ({exc})"
+    return outcome.action, None
 
 
 def publish(

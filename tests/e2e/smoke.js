@@ -4,8 +4,8 @@
  *   python -m casecal demo --out dist-demo
  *   node tests/e2e/smoke.js dist-demo [screenshot-dir]
  *
- * Needs Playwright with Chromium; it is not part of CI. It fails on any console
- * error, which is how a Content-Security-Policy violation would show up.
+ * Needs Playwright with Chromium; the CI workflow runs it on every push. It fails on
+ * any console error, which is how a Content-Security-Policy violation would show up.
  *
  * The family's entries are tried twice: on the demo page, which keeps them in the
  * browser, and on a page wired to the GitHub API. GitHub is played here by a stand-in
@@ -153,20 +153,29 @@ async function main() {
   async function barsFollowTheHouseHours(page) {
     const report = await page.evaluate(() => {
       const IN = 15 / 24, OUT = 11 / 24;
-      const result = { starts: 0, ends: 0, worst: 0, clipped: [], turnovers: 0 };
+      const result = { starts: 0, ends: 0, worst: 0, clipped: [], turnovers: 0, joins: 0, apart: [] };
       const rowOf = (bar) => bar.closest(".week");
+      const has = (bar, name) => bar.classList.contains(name);
       for (const bar of document.querySelectorAll(".months .bar")) {
         const box = bar.getBoundingClientRect();
         const tile = (day) => rowOf(bar).querySelector(`.day[data-day="${day}"]`);
-        if (!bar.classList.contains("cut-l")) {
+        // An edge where a family joins or leaves another is not a check-in or a check-out of the whole bar.
+        if (!has(bar, "cut-l") && !has(bar, "join-l")) {
           const first = tile(bar.dataset.from).getBoundingClientRect();
           result.worst = Math.max(result.worst, Math.abs(box.left - (first.left + IN * first.width)));
           result.starts++;
         }
-        if (!bar.classList.contains("cut-r")) {
+        if (!has(bar, "cut-r") && !has(bar, "join-r")) {
           const last = tile(bar.dataset.to).getBoundingClientRect();
           result.worst = Math.max(result.worst, Math.abs(box.right - (last.left + OUT * last.width)));
           result.ends++;
+        }
+        // Such an edge must touch the stretch it continues into: one band, no gap, no overlap.
+        if (has(bar, "join-l")) {
+          const before = [...bar.parentElement.querySelectorAll(".bar.family.join-r")]
+            .some((other) => Math.abs(other.getBoundingClientRect().right - box.left) < 0.6);
+          if (!before) result.apart.push(bar.dataset.stay);
+          result.joins++;
         }
         const text = bar.querySelector(".txt");
         if (text.textContent && text.getBoundingClientRect().right > box.right + 0.5) result.clipped.push(text.textContent);
@@ -188,6 +197,7 @@ async function main() {
         const bars = [...lane.querySelectorAll(".bar")];
         for (let i = 1; i < bars.length; i++) {
           if (bars[i - 1].dataset.to !== bars[i].dataset.from) continue;
+          if (has(bars[i], "join-l") || has(bars[i - 1], "join-r")) continue; // sharing, not a turnover
           const gap = bars[i].getBoundingClientRect().left - bars[i - 1].getBoundingClientRect().right;
           const width = lane.closest(".week").querySelector(".day").getBoundingClientRect().width;
           result.worst = Math.max(result.worst, Math.abs(gap - (IN - OUT) * width));
@@ -200,6 +210,8 @@ async function main() {
     assert.ok(report.turnovers > 0, "the demo contains a same-day turnover");
     assert.ok(report.worst < 1, `a bar is ${report.worst.toFixed(2)}px away from its hour`);
     assert.deepEqual(report.clipped, [], "labels that do not fit must not be drawn");
+    assert.deepEqual(report.apart, [], "stretches of a shared stay must touch");
+    return report;
   }
 
   /**
@@ -240,9 +252,9 @@ async function main() {
     assert.deepEqual(report.problems, [], "a table lost its shape");
   }
 
-  async function noSidewaysScroll(page) {
+  async function noSidewaysScroll(page, where = "") {
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px`);
+    assert.ok(overflow <= 0, `page scrolls sideways by ${overflow}px${where && " " + where}`);
   }
 
   /** A sheet holds everything it shows: no field sticks out, nothing scrolls sideways. */
@@ -277,10 +289,23 @@ async function main() {
     await press(page, '[data-key="family-add"]');
     await page.waitForSelector("dialog.sheet[open] form");
   }
-  async function openEditForm(page, who) {
-    await press(page, page.locator(".people .entry", { hasText: who }).locator("button"));
+  /** Who the open form says uses the house: the family chosen, or what is written under "Altro". */
+  async function formWho(page) {
+    const chosen = await page.locator(".choices input:checked + span").allTextContents();
+    return chosen.length && chosen[0] !== "Altro" ? chosen[0] : page.inputValue("#entry-who");
+  }
+  /** Say who uses the house: one of the families on offer, or anyone else under "Altro". */
+  async function chooseWho(page, who) {
+    const family = page.locator(".choices label", { hasText: new RegExp("^" + who.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$") });
+    if (await family.count()) return press(page, family);
+    if (await page.locator("#entry-who").isHidden()) await press(page, page.locator(".choices label", { hasText: /^Altro$/ }));
+    await page.fill("#entry-who", who);
+  }
+  /** Open the form of the listed period that shows `text` (a name, or a note when names repeat). */
+  async function openEditForm(page, text, who = text) {
+    await press(page, page.locator(".people .entry", { hasText: text }).locator("button"));
     await page.waitForSelector("dialog.sheet[open] form");
-    assert.equal(await page.inputValue("#entry-who"), who);
+    assert.equal(await formWho(page), who);
   }
   const submit = (page) => press(page, "dialog.sheet button[type=submit]");
   /** Add a period on the dates the form proposes; returns them. */
@@ -288,7 +313,7 @@ async function main() {
     await openAddForm(page);
     assert.equal(await page.locator(".preview .ico-critical").count(), 0, "the proposed dates can be saved as they are");
     const dates = { from: await page.inputValue("#entry-from"), to: await page.inputValue("#entry-to") };
-    await page.fill("#entry-who", who);
+    await chooseWho(page, who);
     if (note) await page.fill("#entry-note", note);
     await page.fill("#entry-me", me);
     await submit(page);
@@ -365,15 +390,22 @@ async function main() {
   assert.deepEqual(lightColours, ["rgb(98, 80, 214)", "rgb(235, 104, 52)", "rgb(98, 80, 214)", "rgb(255, 255, 255)"]);
 
   // The family's own periods: listed, drawn over the calendar, each with its standing on the portal.
+  // The demo: two families share some blocked nights at the first house, and one of them
+  // has a period at the second house on nights still for sale ("con gli zii").
   const demoNames = await names(page);
-  assert.deepEqual(sorted(demoNames), ["Elvio e famiglia", "Nonna Ada"]);
+  assert.deepEqual(sorted(demoNames), ["Famiglia Bianchi", "Famiglia Bianchi", "Famiglia Rossi"]);
   const standing = await page.locator(".people .entry-state strong").allTextContents();
-  assert.deepEqual(sorted(standing), ["Bloccata sul portale", "Da bloccare sul portale"]);
-  assert.match(await page.locator(".people .entry", { hasText: "Nonna Ada" }).innerText(), /ancora in vendita: /);
+  assert.deepEqual(sorted(standing), ["Bloccata sul portale", "Bloccata sul portale", "Da far bloccare al gestore"]);
+  assert.match(await page.locator(".people .entry", { hasText: "con gli zii" }).innerText(), /ancora in vendita: /);
   assert.ok((await page.locator(".months .bar.family.blocked").count()) >= 1, "a protected family period is drawn");
   assert.ok((await page.locator(".months .bar.family.pending").count()) >= 1, "an unprotected one is drawn differently");
   const familyLabels = await page.locator(".months .bar.family .txt").allTextContents();
-  assert.ok(familyLabels.some((text) => text.startsWith("Elvio e famiglia")), "family bars carry the name");
+  assert.ok(familyLabels.some((text) => /Rossi/.test(text)), "family bars carry the name");
+  // The nights the two families share are one bar with both names, touching the bars on either side.
+  const sharedBar = page.locator('.months .bar.family[data-stay*="+"]');
+  assert.ok((await sharedBar.count()) >= 1, "shared nights are drawn as one bar");
+  assert.ok((await sharedBar.locator(".txt").allTextContents()).some((text) => /Rossi \+ (Famiglia )?Bianchi/.test(text)), "with both names");
+  assert.ok((await barsFollowTheHouseHours(page)).joins >= 2, "and its two edges were measured");
   assert.match(await syncText(page), /Versione dimostrativa: le modifiche restano su questo dispositivo/);
   await shot(page, "02-family-desktop");
 
@@ -392,7 +424,10 @@ async function main() {
   await shot(page, "03-tooltip", false);
   const familyDay = await page.locator(".months .bar.family.pending").first().getAttribute("data-from");
   await page.hover(`.day[data-day="${familyDay}"]`);
-  await page.waitForFunction(() => /Uso famiglia: Nonna Ada \(da bloccare sul portale\)/.test(document.querySelector(".tip").textContent));
+  await page.waitForFunction(() => /Uso famiglia: Famiglia Bianchi \(da far bloccare al gestore\)/.test(document.querySelector(".tip").textContent));
+  const sharedDay = await sharedBar.first().getAttribute("data-from");
+  await page.hover(`.day[data-day="${sharedDay}"]`);
+  await page.waitForFunction(() => /Uso famiglia: Famiglia Rossi; Uso famiglia: Famiglia Bianchi/.test(document.querySelector(".tip").textContent));
 
   // Keyboard: arrows walk the days, Enter opens the day's sheet, Escape gives the focus back.
   await page.focus(".day.today");
@@ -419,7 +454,7 @@ async function main() {
   await barsFollowTheHouseHours(page);
   assert.equal(await page.locator(".lane.p1").count() > 0, true, "the remaining house keeps its own hue");
   assert.equal(await page.locator(".lane.p0").count(), 0);
-  assert.deepEqual(await names(page), ["Nonna Ada"], "and only its family periods stay listed");
+  assert.deepEqual(await names(page), ["Famiglia Bianchi"], "and only its family periods stay listed");
   await shot(page, "05-filter-one-house");
   await page.locator(".seg input[name=filter]").nth(0).check({ force: true });
   await page.waitForFunction(() => document.querySelectorAll(".house").length === 2);
@@ -464,9 +499,9 @@ async function main() {
   assert.ok((await page.locator(".col").count()) > 0, "monthly chart drawn");
   // The owner's to-do: the family periods whose nights are still for sale, and only those.
   const todo = await page.locator(".todo").innerText();
-  assert.match(todo, /Da chiudere sul portale del gestore/);
-  assert.match(todo, /Casa Lago\s+.+ → .+ · Nonna Ada/);
-  assert.ok(!todo.includes("Elvio e famiglia"), "a period already blocked needs no action");
+  assert.match(todo, /Da far bloccare al gestore/);
+  assert.match(todo, /Casa Lago\s+.+ → .+ · Famiglia Bianchi/);
+  assert.ok(!todo.includes("Famiglia Rossi") && !todo.includes("Casa Mare"), "periods already blocked need no action");
   await page.locator(".group").nth(7).hover();
   await page.waitForSelector(".tip:not([hidden])");
   await shot(page, "06-owner-desktop");
@@ -504,6 +539,21 @@ async function main() {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForTimeout(150);
   await barsFollowTheHouseHours(page);
+  // Phones come in many widths and with fonts of their own, some wider than this
+  // machine's. On none of them may the page scroll sideways: a table too wide for its
+  // card scrolls inside its own box. From 390px up the guests and stays tables do not
+  // need even that. (At 360 and 375px the stays table once pushed the page sideways,
+  // unnoticed because only 390px was looked at.)
+  const boxed = ".scroll > table.rows:not(.kpi)";
+  assert.equal(await page.locator(boxed).count(), 4, "guests and stays tables sit in a box that scrolls on its own");
+  for (const width of [320, 344, 360, 375, 412, 430, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.waitForTimeout(150);
+    await noSidewaysScroll(page, `at ${width}px`);
+    const cramped = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
+      .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
+    if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table needs sideways scrolling`);
+  }
   // A tap on a day opens its sheet; no hover readout is left behind when it closes.
   await page.locator(".day.today").tap();
   await page.waitForSelector("dialog.sheet[open]");
@@ -518,9 +568,11 @@ async function main() {
   /* ---- phone, light: the family adds, changes and removes its periods (demo: kept in the browser) ---- */
   ({ context, page } = await open({ ...devices["iPhone 13"], colorScheme: "light" }));
   await unlock(page, FAMILY);
+  const sharedBars = () => page.locator('.months .lane.p0 .bar.family[data-stay*="+"]').count();
+  const sharedAtFirst = await sharedBars();
   // From a free day of the calendar.
-  const lakeDay = await page.locator(".people .entry", { hasText: "Nonna Ada" }).evaluate(() => {
-    // The day before Nonna Ada's pending period at the lake house is free there, by construction of the demo.
+  const lakeDay = await page.evaluate(() => {
+    // The day before the pending period at the lake house is free there, by construction of the demo.
     return Number(document.querySelector(".months .bar.family.pending").dataset.from) - 1;
   });
   await page.locator(`.day[data-day="${lakeDay}"]`).tap();
@@ -529,17 +581,21 @@ async function main() {
   await page.waitForSelector("dialog.sheet[open] form");
   assert.equal(await page.inputValue("#entry-house"), "lago");
   assert.equal(await page.evaluate(() => Math.round(Date.parse(document.querySelector("#entry-from").value) / 86400000)), lakeDay);
-  // One night only: the next one belongs to Nonna Ada.
+  // One night only: a proposal never lands on the nights another family already has.
   assert.equal(await page.evaluate(() => Math.round(Date.parse(document.querySelector("#entry-to").value) / 86400000)), lakeDay + 1);
   await closeSheet(page);
 
-  // From the list: nothing is saved without a name; then it is, and it survives a reload.
+  // From the list. The form offers the families; nothing is saved until one is chosen and the writer is named.
   await openAddForm(page);
-  assert.match(await page.locator(".preview").innerText(), /^Dalle 15:00 di .+ alle 11:00 di .+, \d+ nott[ei]\. /);
+  assert.deepEqual(await page.locator(".choices label").allTextContents(), ["Famiglia Rossi", "Famiglia Bianchi", "Altro"]);
+  assert.equal(await page.locator(".choices input:checked").count(), 0, "a device that never wrote assumes no family");
+  assert.ok(await page.locator("#entry-who").isHidden(), "free text only under Altro");
+  assert.match(await page.locator(".preview").first().innerText(), /^Dalle 15:00 di .+ alle 11:00 di .+, \d+ nott[ei]\. /);
   await submit(page);
   await page.waitForSelector("dialog.sheet .error:not([hidden])");
-  assert.match(await page.locator("dialog.sheet .error").innerText(), /Scrivi chi usa la casa/);
-  await page.fill("#entry-who", "Zia Carla");
+  assert.match(await page.locator("dialog.sheet .error").innerText(), /Scegli chi usa la casa/);
+  // Anyone who is not one of the families goes under "Altro".
+  await chooseWho(page, "Zia Carla");
   await page.fill("#entry-me", "");
   await submit(page);
   assert.match(await page.locator("dialog.sheet .error").innerText(), /Scrivi il tuo nome/);
@@ -558,6 +614,7 @@ async function main() {
   const carlaItem = page.locator(".people .entry", { hasText: "Zia Carla" });
   assert.match(await carlaItem.innerText(), /segnato da Luca/);
   assert.match(await carlaItem.innerText(), /arriva in treno/);
+  assert.match(await carlaItem.innerText(), /Da far bloccare al gestore/);
   assert.equal(await page.locator('.months .bar.family[data-stay^="family:e_"]').count() >= 1, true, "the new period is drawn in the calendar");
   await barsFollowTheHouseHours(page);
   await noSidewaysScroll(page);
@@ -565,16 +622,28 @@ async function main() {
   await page.waitForSelector(".shell");
   await waitForNames(page, [...demoNames, "Zia Carla"]);
 
-  // Dates with guests, or already taken by the family, are refused with the reason.
+  // A family on the same nights: allowed, and said before saving.
   await openAddForm(page);
   assert.equal(await page.inputValue("#entry-me"), "Luca", "the device remembers who is writing");
   assert.notEqual(await page.inputValue("#entry-from"), carla.from, "the next proposal skips the nights just taken");
-  await page.fill("#entry-who", "Qualcuno");
   await page.fill("#entry-from", carla.from);
   await page.fill("#entry-to", carla.to);
-  assert.match(await page.locator(".preview").innerText(), /C'è già un periodo in quelle date: Zia Carla/);
+  await chooseWho(page, "Famiglia Rossi");
+  assert.equal(await page.locator("dialog.sheet .preview .ico-critical").count(), 0, "sharing a house is not an error");
+  const notices = await page.locator("dialog.sheet .preview").allInnerTexts();
+  assert.ok(notices.some((text) => /In quelle date c'è anche Zia Carla \(.+ → .+\): la casa sarà condivisa\./.test(text)), notices.join(" | "));
+  await page.fill("#entry-note", "prova condivisa");
+  await sheetFits(page);
+  await shot(page, "09b-phone-shared-period", false);
   await submit(page);
-  assert.match(await page.locator("dialog.sheet .error").innerText(), /C'è già un periodo in quelle date/);
+  await sheetGone(page);
+  await waitForNames(page, [...demoNames, "Zia Carla", "Famiglia Rossi"]);
+  assert.ok((await sharedBars()) > sharedAtFirst, "the nights in common are one bar for the two of them");
+  await barsFollowTheHouseHours(page);
+
+  // The device now starts from the family it wrote for; guests are still a refusal.
+  await openAddForm(page);
+  assert.deepEqual(await page.locator(".choices input:checked + span").allTextContents(), ["Famiglia Rossi"]);
   const guests = await page.evaluate(() => {
     const bar = document.querySelector(".months .lane.p0 .bar.booking:not(.past):not(.cut-l)");
     const ymd = (day) => new Date(day * 86400000).toISOString().slice(0, 10);
@@ -582,7 +651,7 @@ async function main() {
   });
   await page.fill("#entry-from", guests.from);
   await page.fill("#entry-to", guests.to);
-  assert.match(await page.locator(".preview").innerText(), /In quelle date ci sono ospiti/);
+  assert.match(await page.locator(".preview").first().innerText(), /In quelle date ci sono ospiti/);
   await submit(page);
   assert.match(await page.locator("dialog.sheet .error").innerText(), /In quelle date ci sono ospiti/);
   // Moving the check-in past the check-out keeps one night.
@@ -591,20 +660,36 @@ async function main() {
   await page.fill("#entry-from", "2027-03-20");
   assert.equal(await page.inputValue("#entry-to"), "2027-03-21");
   await closeSheet(page);
-  await waitForNames(page, [...demoNames, "Zia Carla"]);
+  await waitForNames(page, [...demoNames, "Zia Carla", "Famiglia Rossi"]);
 
-  // Change it, then remove it: removal asks twice.
+  // Remove the shared period again: found by its note, removal asks twice.
+  await openEditForm(page, "prova condivisa", "Famiglia Rossi");
+  let remove = page.locator("dialog.sheet .btn.danger");
+  await press(page, remove);
+  assert.equal(await remove.innerText(), "Conferma eliminazione");
+  assert.equal((await names(page)).length, demoNames.length + 2, "one click removes nothing");
+  await press(page, remove);
+  await sheetGone(page);
+  await waitForNames(page, [...demoNames, "Zia Carla"]);
+  assert.equal(await sharedBars(), sharedAtFirst);
+
+  // Change the other one, then remove it too.
   await openEditForm(page, "Zia Carla");
   assert.match(await page.locator("dialog.sheet .sheet-head h2").innerText(), /Modifica periodo/);
   await page.fill("#entry-who", "Zia Carla e Piero");
   await submit(page);
   await sheetGone(page);
   await waitForNames(page, [...demoNames, "Zia Carla e Piero"]);
+  // A period of "Altro" can be handed to one of the families, and back.
   await openEditForm(page, "Zia Carla e Piero");
-  const remove = page.locator("dialog.sheet .btn.danger");
+  await chooseWho(page, "Famiglia Bianchi");
+  assert.ok(await page.locator("#entry-who").isHidden());
+  await submit(page);
+  await sheetGone(page);
+  await waitForNames(page, [...demoNames, "Famiglia Bianchi"]);
+  await openEditForm(page, "arriva in treno", "Famiglia Bianchi");
+  remove = page.locator("dialog.sheet .btn.danger");
   await press(page, remove);
-  assert.equal(await remove.innerText(), "Conferma eliminazione");
-  assert.equal((await names(page)).length, demoNames.length + 1, "one click removes nothing");
   await press(page, remove);
   await sheetGone(page);
   await waitForNames(page, demoNames);
@@ -622,11 +707,11 @@ async function main() {
     `http://127.0.0.1:${missingServer.address().port}/`));
   await unlock(page, FAMILY);
   assert.equal(await page.locator(".months .lane.p1").count(), 0, "a house that was not read has no calendar");
-  const unread = page.locator(".people .entry", { hasText: "Nonna Ada" });
+  const unread = page.locator(".people .entry", { hasText: "con gli zii" });
   assert.match(await unread.innerText(), /Non verificabile sul portale\s+il portale di questa casa non è stato letto/);
-  await openEditForm(page, "Nonna Ada");
+  await openEditForm(page, "con gli zii", "Famiglia Bianchi");
   assert.equal(await page.inputValue("#entry-house"), "lago", "its notes can still be changed");
-  assert.match(await page.locator(".preview").innerText(), /Non verificabile: il portale di questa casa non è stato letto/);
+  assert.match(await page.locator(".preview").first().innerText(), /Non verificabile: il portale di questa casa non è stato letto/);
   await closeSheet(page);
   await context.close();
   missingServer.close();
@@ -704,7 +789,7 @@ async function main() {
   assert.match(await syncText(phone.page), /token del registro di famiglia è scaduto o è stato revocato/);
   await waitForNames(phone.page, [...demoNames, "Nonno Piero", "Zia Carla"]);
   await openAddForm(phone.page);
-  await phone.page.fill("#entry-who", "Non salvato");
+  await chooseWho(phone.page, "Non salvato");
   await submit(phone.page);
   await phone.page.waitForSelector("dialog.sheet .error:not([hidden])");
   assert.match(await phone.page.locator("dialog.sheet .error").innerText(), /token del registro di famiglia/);

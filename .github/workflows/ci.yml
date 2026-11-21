@@ -43,3 +43,39 @@ jobs:
 
       - name: La pagina dimostrativa si costruisce
         run: python -m casecal demo --out dist-demo
+
+  # La pagina in un browser vero: disposizione, colori, modulo, registro di famiglia con
+  # una finta API di GitHub. Un difetto di impaginazione sfuggito ai test qui sopra è già
+  # arrivato in produzione una volta; da allora questo job gira a ogni push.
+  browser:
+    name: Pagina nel browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Dipendenze
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      # Versione fissata, come le dipendenze Python: il test non deve cambiare esito per
+      # un aggiornamento che nessuno ha provato.
+      - name: Playwright e Chromium
+        run: |
+          npm install --no-save --no-package-lock --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Pagina dimostrativa
+        run: python -m casecal demo --out dist-demo
+
+      - name: Test nel browser
+        run: node tests/e2e/smoke.js dist-demo

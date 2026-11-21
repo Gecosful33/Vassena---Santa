@@ -91,8 +91,8 @@ def test_the_log_replays_into_the_current_entries():
 
 
 def test_a_deleted_entry_can_be_written_again():
-    events = [{"t": "set", **raw()}, {"t": "del", "id": raw()["id"]}, {"t": "set", **raw(who="Elvio")}]
-    assert fold(events)[raw()["id"]].who == "Elvio"
+    events = [{"t": "set", **raw()}, {"t": "del", "id": raw()["id"]}, {"t": "set", **raw(who="Paolo")}]
+    assert fold(events)[raw()["id"]].who == "Paolo"
 
 
 def test_replay_continues_from_entries_already_known():
@@ -117,7 +117,7 @@ def test_bad_events_are_skipped_without_losing_the_rest():
 
 
 def test_a_snapshot_replaces_everything_before_it():
-    kept = FamilyEntry.from_dict(raw(id="e_kept000001", who="Elvio"))
+    kept = FamilyEntry.from_dict(raw(id="e_kept000001", who="Paolo"))
     events = [
         {"t": "set", **raw()},
         snapshot_event([kept]),
@@ -133,8 +133,8 @@ def test_the_diary_cannot_be_flooded():
     state = fold(flood)
     assert len(state) == family.MAX_ENTRIES
     # An entry that already exists can still be edited when the diary is full.
-    edited = fold([{"t": "set", **raw(id="e_0000000000", who="Elvio")}], state)
-    assert edited["e_0000000000"].who == "Elvio" and len(edited) == family.MAX_ENTRIES
+    edited = fold([{"t": "set", **raw(id="e_0000000000", who="Paolo")}], state)
+    assert edited["e_0000000000"].who == "Paolo" and len(edited) == family.MAX_ENTRIES
 
 
 def test_entries_are_listed_by_date():

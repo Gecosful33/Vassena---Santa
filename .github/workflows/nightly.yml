@@ -30,6 +30,7 @@ jobs:
       pages: write      # deploy su GitHub Pages
       id-token: write   # richiesto da actions/deploy-pages
       actions: write    # solo per il passo "Mantieni attivo lo schedule"
+      issues: write     # solo per la segnalazione «Date da far bloccare al gestore»
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -67,10 +68,16 @@ jobs:
           VASSENA_KB_PASS: ${{ secrets.VASSENA_KB_PASS }}
           # Facoltativi. FAMILY_LOG_TOKEN attiva «Chi usa la casa»: un token fine-grained
           # limitato alle Issues di questo repository (vedi README); senza, la pagina resta
-          # in sola lettura. OLD_FAMILY_PASSPHRASE serve per una sola esecuzione dopo aver
-          # cambiato la password di famiglia.
+          # in sola lettura. FAMILY_GROUPS elenca le famiglie proposte nel modulo, separate
+          # da punto e virgola. OLD_FAMILY_PASSPHRASE serve per una sola esecuzione dopo
+          # aver cambiato la password di famiglia.
           FAMILY_LOG_TOKEN: ${{ secrets.FAMILY_LOG_TOKEN }}
+          FAMILY_GROUPS: ${{ secrets.FAMILY_GROUPS }}
           OLD_FAMILY_PASSPHRASE: ${{ secrets.OLD_FAMILY_PASSPHRASE }}
+          # Il token del workflow stesso: apre e commenta la segnalazione per il proprietario.
+          # Deve scriverla GitHub Actions, non il proprietario: nessuno riceve notifiche di
+          # ciò che fa da sé.
+          ALERTS_TOKEN: ${{ github.token }}
           SITE_URL: ${{ steps.pages.outputs.base_url }}
         run: python -m casecal sync --out dist
 

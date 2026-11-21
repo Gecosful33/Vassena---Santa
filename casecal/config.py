@@ -24,8 +24,11 @@ DEFAULT_CHECK_OUT = "11:00"
 
 # Secrets the program can do without. FAMILY_LOG_TOKEN turns on the family's own
 # entries (without it the page is read-only); OLD_FAMILY_PASSPHRASE is set for one
-# run after the family passphrase has been changed, to carry those entries over.
-OPTIONAL_SECRETS = ("FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE")
+# run after the family passphrase has been changed, to carry those entries over;
+# FAMILY_GROUPS names the families the entry form offers as fixed choices (the
+# repository is public, so their names live in a secret and travel encrypted).
+OPTIONAL_SECRETS = ("FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS")
+GROUP_LIMIT, GROUP_NAME_LIMIT = 8, 40
 
 
 class ConfigError(ValueError):
@@ -40,6 +43,9 @@ class PropertyConfig:
     # House rules: guests arrive from check_in and leave by check_out (HH:MM, 24h).
     check_in: str = DEFAULT_CHECK_IN
     check_out: str = DEFAULT_CHECK_OUT
+    # A booking the portal lists with every amount at zero is the owners' own stay,
+    # entered by the manager: it is shown as blocked dates, not as guests.
+    unpaid_is_own_use: bool = False
 
     def secret_names(self) -> tuple[str, str, str]:
         return (f"{self.env}_KB_URL", f"{self.env}_KB_USER", f"{self.env}_KB_PASS")
@@ -97,7 +103,10 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
         except KeyError as exc:
             raise ConfigError(f"{path}: a [[property]] manca il campo {exc.args[0]}") from exc
         hours = _house_hours(path, f"[[property]] {identity['id']}: ", entry, check_in, check_out)
-        prop = PropertyConfig(**identity, check_in=hours[0], check_out=hours[1])
+        own_use = entry.get("unpaid_is_own_use", False)
+        if not isinstance(own_use, bool):
+            raise ConfigError(f"{path}: [[property]] {identity['id']}: unpaid_is_own_use deve essere true o false")
+        prop = PropertyConfig(**identity, check_in=hours[0], check_out=hours[1], unpaid_is_own_use=own_use)
         if not _ID_RE.match(prop.id):
             raise ConfigError(f"{path}: id non valido {prop.id!r} (minuscole, cifre, trattini)")
         if not _ENV_RE.match(prop.env):
@@ -129,6 +138,32 @@ def missing_secrets(config: Config, environ: Mapping[str, str]) -> list[str]:
     for prop in config.properties:
         names.extend(prop.secret_names())
     return [name for name in names if not environ.get(name, "").strip()]
+
+
+def family_groups(environ: Mapping[str, str]) -> tuple[list[str], list[str]]:
+    """The families the entry form offers, from FAMILY_GROUPS, and what was wrong with it.
+
+    Names are separated by semicolons or new lines. A value that cannot be used
+    as written is trimmed rather than refused: a slip in an optional setting
+    must not stop the calendar. The problems are worded without the names.
+    """
+    raw = environ.get("FAMILY_GROUPS", "")
+    names: list[str] = []
+    problems: list[str] = []
+    for part in re.split(r"[;\n]", raw):
+        name = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", part).split())
+        if not name:
+            continue
+        if len(name) > GROUP_NAME_LIMIT:
+            problems.append(f"FAMILY_GROUPS: un nome supera i {GROUP_NAME_LIMIT} caratteri ed è stato ignorato")
+        elif name.casefold() in (known.casefold() for known in names):
+            problems.append("FAMILY_GROUPS: un nome è ripetuto")
+        elif len(names) == GROUP_LIMIT:
+            problems.append(f"FAMILY_GROUPS: più di {GROUP_LIMIT} nomi, i successivi sono stati ignorati")
+            break
+        else:
+            names.append(name)
+    return names, problems
 
 
 def credentials_for(prop: PropertyConfig, environ: Mapping[str, str]) -> PortalCredentials:

@@ -23,7 +23,8 @@
       // The family's own entries: the current map, where changes are written (null =
       // read-only page), how far the log has been read, and the key that opens it.
       entries: {}, store: null, cursor: 0, familyKey: null,
-      sync: { phase: "off", code: null }
+      sync: { phase: "off", code: null },
+      groups: [] // the families the entry form offers as fixed choices (empty: free text)
     };
   }
 
@@ -59,7 +60,8 @@
     closed: "M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11zM5.2 8h5.6",
     unknown: "M6 6.2a2 2 0 1 1 3.1 1.7c-.7.5-1.1.9-1.1 1.8M8 12.3v.2",
     warning: "M8 2.5l6 10.5H2zM8 6.6v2.9M8 11.4v.2",
-    critical: "M8 2.5l6 10.5H2zM8 6.6v2.9M8 11.4v.2"
+    critical: "M8 2.5l6 10.5H2zM8 6.6v2.9M8 11.4v.2",
+    info: "M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11zM8 7.4v3.4M8 5.2v.2"
   };
 
   function icon(name) {
@@ -229,6 +231,11 @@
     state.entries = L.foldEvents((opened.family.entries || []).map(function (raw) {
       return Object.assign({ t: "set" }, raw);
     }), {});
+    // Names come from a setting typed by hand: only plain, short, distinct ones are offered.
+    (Array.isArray(opened.family.groups) ? opened.family.groups : []).forEach(function (name) {
+      if (typeof name !== "string" || !name.trim() || name.length > 80) return;
+      if (state.groups.indexOf(name.trim()) < 0) state.groups.push(name.trim());
+    });
     var log = opened.family.log;
     state.store = Store.open(log, { storage: browserStorage() });
     state.cursor = log && typeof log.cursor === "number" ? log.cursor : 0;
@@ -396,7 +403,7 @@
    * says whether its nights are really blocked there.
    */
 
-  var ME = "casecal.me";
+  var ME = "casecal.me", MINE = "casecal.family";
   var STORE_MESSAGES = {
     offline: "Connessione assente: le modifiche non si possono leggere né salvare.",
     token: "Il token del registro di famiglia è scaduto o è stato revocato: finché non viene rinnovato le modifiche non sono disponibili.",
@@ -409,6 +416,9 @@
   function browserStorage() { try { return window.localStorage; } catch (err) { return null; } }
   function myName() { try { return localStorage.getItem(ME) || ""; } catch (err) { return ""; } }
   function rememberName(name) { try { localStorage.setItem(ME, name); } catch (err) { /* private mode */ } }
+  // The family this device last wrote a period for: the next one starts from there.
+  function myFamily() { try { return localStorage.getItem(MINE) || ""; } catch (err) { return ""; } }
+  function rememberFamily(name) { try { localStorage.setItem(MINE, name); } catch (err) { /* private mode */ } }
 
   function familyView() {
     return JSON.stringify(L.entriesOf(state.entries).map(L.entryRecord)) + state.sync.phase + state.sync.code;
@@ -500,7 +510,7 @@
 
   var ENTRY_STATE = {
     blocked: { icon: "free", text: "Bloccata sul portale" },
-    pending: { icon: "warning", text: "Da bloccare sul portale" },
+    pending: { icon: "warning", text: "Da far bloccare al gestore" },
     conflict: { icon: "critical", text: "Ci sono ospiti in quelle date" },
     unknown: { icon: "unknown", text: "Non verificabile sul portale" }
   };
@@ -559,12 +569,36 @@
       class: "input", id: "entry-to", type: "date", required: true, min: "2000-01-02", max: "2100-01-01",
       value: L.ymd(start.end)
     });
+    var groups = state.groups, OTHER = "\u0000altro"; // a value no name can have
     var known = {};
-    L.entriesOf(state.entries).forEach(function (other) { known[other.who] = true; });
-    var who = el("input", {
-      class: "input", id: "entry-who", type: "text", maxlength: "80", required: true, autocomplete: "off",
-      list: "entry-people", value: entry ? entry.who : "", placeholder: "Es. Marco e Giulia"
+    L.entriesOf(state.entries).forEach(function (other) {
+      if (groups.indexOf(other.who) < 0) known[other.who] = true;
     });
+    // With a list of families the choice is one of them or "Altro"; a new period
+    // starts from the family this device wrote for last time.
+    var picked = !groups.length ? OTHER
+      : entry ? (groups.indexOf(entry.who) >= 0 ? entry.who : OTHER)
+      : (groups.indexOf(myFamily()) >= 0 ? myFamily() : null);
+    var who = el("input", {
+      class: "input", id: "entry-who", type: "text", maxlength: "80", autocomplete: "off",
+      list: "entry-people", value: entry && picked === OTHER ? entry.who : "",
+      placeholder: groups.length ? "Scrivi chi usa la casa" : "Es. Marco e Giulia",
+      "aria-label": groups.length ? "Chi usa la casa: altro" : null
+    });
+    var choices = groups.length ? el("div", { class: "choices", role: "radiogroup", "aria-labelledby": "entry-who-label" },
+      groups.concat([OTHER]).map(function (value, index) {
+        var input = el("input", { type: "radio", name: "entry-who-choice", id: "entry-who-" + index });
+        input.checked = value === picked;
+        input.addEventListener("change", function () {
+          picked = value;
+          who.hidden = picked !== OTHER;
+          if (picked === OTHER) who.focus();
+          refreshPreview();
+        });
+        return el("label", null, input, el("span", { text: value === OTHER ? "Altro" : value }));
+      })) : null;
+    who.hidden = picked !== OTHER;
+    function whoValue() { return picked === OTHER ? who.value : (picked || ""); }
     var note = el("input", {
       class: "input", id: "entry-note", type: "text", maxlength: "200", autocomplete: "off",
       value: entry ? entry.note : ""
@@ -574,18 +608,19 @@
       value: myName()
     });
     var preview = el("p", { class: "preview", "aria-live": "polite" });
+    var sharing = el("p", { class: "preview", "aria-live": "polite" });
     var error = el("p", { class: "error", role: "alert", hidden: true });
     var submit = el("button", { class: "btn primary", type: "submit", text: entry ? "Salva le modifiche" : "Salva" });
     var remove = entry ? el("button", { class: "btn danger", type: "button", text: "Elimina" }) : null;
 
     function candidate() {
       return {
-        id: entry ? entry.id : null, prop: house.value, who: who.value,
+        id: entry ? entry.id : null, prop: house.value, who: whoValue(),
         start: from.value ? L.dayFromYmd(from.value) : NaN, end: to.value ? L.dayFromYmd(to.value) : NaN
       };
     }
     function explain(check) {
-      if (check.code === "who") return "Scrivi chi usa la casa.";
+      if (check.code === "who") return groups.length && picked === null ? "Scegli chi usa la casa." : "Scrivi chi usa la casa.";
       if (check.code === "dates") return "Controlla le date: il check-out deve essere dopo il check-in.";
       if (check.code === "long") {
         return "Un periodo può durare al massimo " + L.MAX_NIGHTS + " notti: per un uso più lungo inserisci più periodi.";
@@ -593,14 +628,18 @@
       if (check.code === "guests") {
         return "In quelle date ci sono ospiti (da " + dayLabel(check.detail.start) + " a " + dayLabel(check.detail.end) + "): scegli altre date.";
       }
-      if (check.code === "overlap") {
-        return "C'è già un periodo in quelle date: " + check.detail.who + ", da " +
-          dayLabel(check.detail.start) + " a " + dayLabel(check.detail.end) + ".";
-      }
       return "Scegli una casa.";
+    }
+    /** Said before saving, not to stop it: who else has the house on some of those nights. */
+    function sharedWith(others) {
+      var listed = others.slice(0, 3).map(function (other) {
+        return other.who + " (" + shortLabel(other.start) + " → " + shortLabel(other.end) + ")";
+      });
+      return "In quelle date c'è anche " + listed.join(", ") + (others.length > 3 ? " e altri" : "") + ": la casa sarà condivisa.";
     }
     function refreshPreview() {
       clear(preview);
+      clear(sharing);
       var asked = candidate(), prop = houseById(asked.prop);
       if (!prop || isNaN(asked.start) || isNaN(asked.end)) return;
       // The name is checked on saving, not while the dates are being chosen.
@@ -609,6 +648,7 @@
         append(preview, [icon("critical"), el("span", { text: explain(check) })]);
         return;
       }
+      if (check.shared.length) append(sharing, [icon("info"), el("span", { text: sharedWith(check.shared) })]);
       var status = L.entryStatus(asked, prop);
       var when = "Dalle " + prop.hours.checkIn + " di " + dayLabel(asked.start) + " alle " + prop.hours.checkOut +
         " di " + dayLabel(asked.end) + ", " + nights(asked.end - asked.start) + ". ";
@@ -622,8 +662,8 @@
             : " il portale di questa casa non è stato letto. Le date vanno controllate lì.")]);
       } else {
         append(preview, [icon("warning"), el("span", null, when,
-          el("strong", { text: "Date non ancora bloccate sul portale" }),
-          " (" + runsText(status.open) + "): finché non vengono chiuse lì, gli ospiti possono prenotarle.")]);
+          el("strong", { text: "Date non ancora bloccate" }),
+          " (" + runsText(status.open) + "): finché il gestore non le blocca, gli ospiti possono prenotarle.")]);
       }
     }
     function busy(on) {
@@ -648,13 +688,16 @@
       field("entry-house", "Casa", house),
       el("div", { class: "pair" }, field("entry-from", "Check-in", from), field("entry-to", "Check-out", to)),
       preview,
-      field("entry-who", "Chi usa la casa", who),
+      groups.length
+        ? el("div", { class: "field" }, el("span", { class: "label", id: "entry-who-label", text: "Chi usa la casa" }), choices, who)
+        : field("entry-who", "Chi usa la casa", who),
+      sharing,
       el("datalist", { id: "entry-people" }, Object.keys(known).sort().map(function (name) {
         return el("option", { value: name });
       })),
       field("entry-note", "Nota (facoltativa)", note),
       field("entry-me", "Il tuo nome", me),
-      el("p", { class: "hint", text: "È un promemoria per la famiglia: non chiude le date sul portale del gestore." }),
+      el("p", { class: "hint", text: "È un promemoria per la famiglia: le date le blocca il gestore, su richiesta." }),
       error,
       el("div", { class: "sheet-actions" }, submit, remove));
 
@@ -670,10 +713,11 @@
       var record = L.validEntry({
         id: asked.id || L.entryId(crypto.getRandomValues(new Uint8Array(12))), prop: asked.prop,
         start: L.ymd(asked.start), end: L.ymd(asked.end),
-        who: who.value, note: note.value, by: author, at: stampNow()
+        who: asked.who, note: note.value, by: author, at: stampNow()
       });
       if (!record) { showError(error, "Controlla i dati inseriti: nomi e nota non possono superare la lunghezza indicata."); return; }
       rememberName(author);
+      if (groups.indexOf(record.who) >= 0) rememberFamily(record.who);
       busy(true);
       saveEvent(Object.assign({ t: "set" }, L.entryRecord(record))).then(done, fail);
     });
@@ -695,7 +739,8 @@
     // Saved: close this sheet, unless it was closed meanwhile and another one is open.
     function done() { if (sheet === mine) closeSheet(); }
     refreshPreview();
-    (entry ? submit : who).focus();
+    var first = entry ? submit : who.hidden ? form.querySelector(".choices input:checked, .choices input") : who;
+    first.focus();
   }
 
   /** Everything about one day, with the ways to change it. */
@@ -705,8 +750,8 @@
       var touching = L.entriesOf(state.entries, prop.id).filter(function (entry) {
         return entry.start <= day && day <= entry.end;
       });
-      var taken = touching.some(function (entry) { return day < entry.end; });
-      var canAdd = state.store && !taken && (info.state === "free" || info.state === "closed");
+      // Also on a night another family already has: the house can be shared.
+      var canAdd = state.store && (info.state === "free" || info.state === "closed");
       return el("div", { class: "sheet-house p" + prop.index },
         el("div", { class: "house-head" }, el("b", { class: "tag", text: prop.badge }), el("h3", { text: prop.label })),
         el("p", { class: "now" }, icon(info.state),
@@ -753,7 +798,7 @@
             entrySheet(null, L.draftPeriod(first, L.firstOpenDay(first, state.today, state.entries), state.entries));
           }
         }) : null),
-      el("p", { class: "hint", text: "Segna quando usi una casa, così lo sanno tutti. È un promemoria: per impedire le prenotazioni degli ospiti le date vanno chiuse sul portale del gestore, e ogni periodo indica se lo sono già." }),
+      el("p", { class: "hint", text: "Segna quando usi una casa, così lo sanno tutti. È un promemoria: per impedire le prenotazioni degli ospiti le date vanno fatte bloccare al gestore, e ogni periodo indica se lo sono già." }),
       syncLine(),
       el("div", { class: "stays" }, groups.map(function (group) {
         return el("div", { class: "p" + group.prop.index },
@@ -764,7 +809,11 @@
       })));
   }
 
-  /** For the owner: the nights family members are counting on that are not known to be closed. */
+  /**
+   * For the owner: the nights family members are counting on that are not known to be
+   * blocked. Blocking is the manager's job, asked for by hand; the link only lets the
+   * owner look at the portal.
+   */
   function closingList(props, byId) {
     var groups = props.map(function (prop) {
       var open = [];
@@ -777,7 +826,7 @@
     }).filter(function (group) { return group.open.length; });
     if (!groups.length) return null;
     return el("div", { class: "todo" },
-      el("h3", null, icon("warning"), "Da chiudere sul portale del gestore"),
+      el("h3", null, icon("warning"), "Da far bloccare al gestore"),
       groups.map(function (group) {
         var url = byId[group.prop.id] && byId[group.prop.id].portal_url;
         return el("div", { class: "p" + group.prop.index },
@@ -787,7 +836,7 @@
               (item.status.state === "unknown" ? " · da verificare: il portale non pubblica ancora queste date" : "") });
           })),
           typeof url === "string" && url.indexOf("https://") === 0
-            ? el("a", { class: "btn", href: url, target: "_blank", rel: "noopener noreferrer", text: "Apri il portale di " + group.prop.label })
+            ? el("a", { class: "btn", href: url, target: "_blank", rel: "noopener noreferrer", text: "Controlla sul portale di " + group.prop.label })
             : null);
       }));
   }
@@ -873,7 +922,9 @@
     var withDetails = guests.some(function (guest) { return !!stayDetails(guest.stay); });
     var withChannel = guests.some(function (guest) { return !!guest.stay.channel; });
     var next = guests.filter(function (guest) { return !guest.current; })[0];
-    append(card, el("table", { class: "rows" },
+    // In a box that scrolls on its own: whatever the screen and the device's font, a
+    // table too wide for the card must not make the whole page scroll sideways.
+    append(card, el("div", { class: "scroll" }, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
         el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
         el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
@@ -890,7 +941,7 @@
           el("td", { class: "num", text: F.int.format(stay.end - stay.start) }),
           withDetails ? el("td", null, stay.channel || (known ? guestsLabel(stay.guests) : ""),
             stay.channel && known ? el("span", { class: "sub", text: guestsLabel(stay.guests) }) : null) : null);
-      }))));
+      })))));
     if (guests.length > GUESTS_SHOWN) {
       var key = "guests:" + prop.id;
       append(card, el("button", {
@@ -972,7 +1023,7 @@
       return entry.start <= day && day < entry.end;
     }).map(function (entry) {
       var kind = L.entryStatus(entry, prop).state;
-      return "Uso famiglia: " + entry.who + (kind === "pending" ? " (da bloccare sul portale)"
+      return "Uso famiglia: " + entry.who + (kind === "pending" ? " (da far bloccare al gestore)"
         : kind === "conflict" ? " (ci sono ospiti)" : kind === "unknown" ? " (non verificabile sul portale)" : "");
     }).join("; ");
   }
@@ -996,7 +1047,7 @@
     return guests ? [guests] : (stay.channel ? [stay.channel] : []);
   }
 
-  function monthBlock(month, props, focusDay) {
+  function monthBlock(month, props, focusDay, runs) {
     var first = L.dayOf(month.y, month.m, 1);
     var block = el("section", { class: "month" + (first + L.daysInMonth(month.y, month.m) <= state.today ? " past" : "") },
       el("h3", { text: F.month.format(dateOf(first)) }),
@@ -1026,27 +1077,36 @@
           bar.labels = barLabels(stay);
           place(bar, segment.left, segment.right, 7);
           return bar;
-        }), familyBars(prop, week));
+        }), familyBars(prop, week, runs[prop.id]));
       }));
       block.appendChild(el("div", { class: "week" }, cells, lanes));
     });
     return block;
   }
 
-  /** The family's periods of one house in one week row; they sit over the bars beneath. */
-  function familyBars(prop, week) {
-    var periods = L.entriesOf(state.entries, prop.id).map(function (entry) {
-      return { start: entry.start, end: entry.end, kind: "family", entry: entry };
-    });
-    return L.weekSegments(periods, week, prop.hours.inAt, prop.hours.outAt).map(function (segment) {
-      var entry = segment.stay.entry, kind = L.entryStatus(entry, prop).state;
+  /**
+   * The family's periods of one house in one week row; they sit over the bars beneath.
+   * `runs` are the stretches worked out by L.familyRuns: where two periods share
+   * nights there is one bar with both names, flush against the bars on either side.
+   */
+  function familyBars(prop, week, runs) {
+    return L.clipToWeek(runs, week).map(function (segment) {
+      var run = segment.span, names = [];
+      run.entries.forEach(function (entry) { if (names.indexOf(entry.who) < 0) names.push(entry.who); });
+      var full = names.join(" + "), short = names.map(L.shortName).join(" + ");
+      var suffix = run.state === "pending" ? " · da far bloccare" : run.state === "conflict" ? " · ci sono ospiti" : "";
+      var over = run.entries.every(function (entry) { return entry.end <= state.today; });
       var bar = el("div", {
-        class: "bar family " + kind + (segment.cutLeft ? " cut-l" : "") + (segment.cutRight ? " cut-r" : "") +
-          (entry.end <= state.today ? " past" : ""),
-        "data-stay": "family:" + entry.id, "data-from": String(entry.start), "data-to": String(entry.end)
+        class: "bar family " + run.state +
+          (segment.cutLeft ? " cut-l" : run.joinLeft ? " join-l" : "") +
+          (segment.cutRight ? " cut-r" : run.joinRight ? " join-r" : "") + (over ? " past" : ""),
+        "data-stay": "family:" + run.entries.map(function (entry) { return entry.id; }).join("+"),
+        "data-from": String(Math.floor(run.from + 1e-9)), "data-to": String(Math.floor(run.to + 1e-9))
       }, el("b", { class: "tag", text: prop.badge }), el("span", { class: "txt" }));
-      bar.labels = kind === "pending" ? [entry.who + " · da bloccare", entry.who]
-        : kind === "conflict" ? [entry.who + " · ci sono ospiti", entry.who] : [entry.who];
+      // Longest first; the first that fits is written (see fitLabels).
+      bar.labels = [full + suffix, full, short + suffix, short].filter(function (label, index, all) {
+        return all.indexOf(label) === index;
+      });
       place(bar, segment.left, segment.right, 7);
       return bar;
     });
@@ -1122,8 +1182,11 @@
       : L.dayOf(today.y, today.m, 1);
     var months = L.monthsBetween(from, to);
     var focusDay = state.today >= from && state.today < to ? state.today : from;
+    // The family's periods of each house, as stretches to draw: worked out once for all the months.
+    var runs = {};
+    props.forEach(function (prop) { runs[prop.id] = L.familyRuns(L.entriesOf(state.entries, prop.id), prop); });
     var grid = el("div", { class: "months" + (props.length === 1 ? " single" : "") },
-      months.map(function (month) { return monthBlock(month, props, focusDay); }));
+      months.map(function (month) { return monthBlock(month, props, focusDay, runs); }));
     var laneHeight = props.length === 1 ? 26 : 20;
     grid.style.setProperty("--lane-h", laneHeight + "px");
     grid.style.setProperty("--lanes-h", (props.length * laneHeight + (props.length - 1) * GAP) + "px");
@@ -1167,12 +1230,12 @@
           el("span", null, STATE_TEXT[stay.kind] + (running ? " · in corso" : ""),
             stayDetails(stay) ? el("span", { class: "sub", text: stayDetails(stay) }) : null)))));
     });
-    return el("table", { class: "rows" },
+    return el("div", { class: "scroll" }, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
         el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
         el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
         el("th", { scope: "col", class: "num", text: "Notti" }), el("th", { scope: "col", text: "Stato" }))),
-      el("tbody", null, rows));
+      el("tbody", null, rows)));
   }
 
   function staysSection() {

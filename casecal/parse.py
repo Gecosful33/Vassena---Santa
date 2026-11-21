@@ -472,6 +472,35 @@ def parse_reservations(html: str, *, start: date, end: date) -> ReservationTable
     return ReservationTable(columns=columns, roles=roles, rows=rows)
 
 
+def own_use_as_closed(
+    stays: list[Stay], reservations: list[Reservation], *, covered_from: date, covered_to: date
+) -> list[Stay]:
+    """Turn the bookings that bill nothing into blocked dates.
+
+    For a house whose manager enters the owners' own stays as bookings with
+    every amount at zero. Those are not guests: in the calendar they read like
+    dates closed to sale. A booking stays a booking when the portal lists no
+    reservation for its dates, or lists one without any amount at all: only a
+    row of explicit zeros says "nobody pays for this". And when the portal
+    lists more than one row on the same dates (a booking and the one it
+    replaced), a single row that bills something, or says nothing, keeps them a
+    booking: taking guests for an empty house is the mistake that costs.
+    """
+    # True as soon as one row on those dates is anything but explicit zeros.
+    billed: dict[tuple[date, date], bool] = {}
+    for reservation in reservations:
+        key = (max(reservation.check_in, covered_from), min(reservation.check_out, covered_to))
+        amounts = [value for value in reservation.values if value is not None]
+        unpaid = bool(amounts) and all(value == 0 for value in amounts)
+        billed[key] = billed.get(key, False) or not unpaid
+    return [
+        Stay(stay.start, stay.end, CLOSED)
+        if stay.kind == BOOKING and billed.get((stay.start, stay.end)) is False
+        else stay
+        for stay in stays
+    ]
+
+
 def attach_details(
     stays: list[Stay], reservations: list[Reservation], *, covered_from: date, covered_to: date
 ) -> tuple[list[Stay], int]:

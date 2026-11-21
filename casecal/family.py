@@ -21,7 +21,7 @@ from __future__ import annotations
 import binascii
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Iterable, Mapping
 
 from cryptography.exceptions import InvalidTag
@@ -119,6 +119,40 @@ class FamilyEntry:
             by=_text(raw.get("by"), BY_LIMIT),
             at=stamp if isinstance(stamp, str) and _STAMP_RE.match(stamp) else "",
         )
+
+
+BLOCKED, PENDING, CONFLICT, UNKNOWN = "blocked", "pending", "conflict", "unknown"
+
+
+def entry_status(entry: FamilyEntry, house: Any) -> str:
+    """Where an entry stands against the manager's calendar.
+
+    ``blocked``: every night is closed to sale, nobody can book over it.
+    ``pending``: some nights are still for sale; the manager has to block them.
+    ``conflict``: guests are booked on some of its nights.
+    ``unknown``: it cannot be told, because the house was not read or the
+    portal publishes nothing yet for some of the nights.
+
+    ``house`` is the house's snapshot (``None`` or a missing house: unknown).
+    The page works the same answer out for itself in ``web/logic.js``
+    (``entryStatus``); both are held to the same cases in
+    ``tests/fixtures/entry_status.json``.
+    """
+    if house is None or getattr(house, "missing", False):
+        return UNKNOWN
+    guests = on_sale = unread = False
+    night = entry.start
+    while night < entry.end:
+        if not house.covered_from <= night < house.covered_to:
+            unread = True
+        else:
+            kind = next((stay.kind for stay in house.stays if stay.start <= night < stay.end), None)
+            if kind is None:
+                on_sale = True
+            elif kind != "closed":
+                guests = True
+        night += timedelta(days=1)
+    return CONFLICT if guests else PENDING if on_sale else UNKNOWN if unread else BLOCKED
 
 
 def fold(

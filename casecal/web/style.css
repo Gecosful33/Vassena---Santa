@@ -109,7 +109,20 @@ button, input { font: inherit; color: inherit; }
 .btn.quiet:hover { background: var(--surface-2); color: var(--text-primary); }
 
 .field { display: grid; gap: 6px; }
-.field > label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+.field > label, .field > .label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
+/* One of a few names: large enough for a thumb, wrapping when the names are long. */
+.choices { display: flex; flex-wrap: wrap; gap: 8px; }
+.choices label { position: relative; display: block; }
+.choices input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.choices span {
+  display: flex; align-items: center; min-height: 44px; padding: 0 14px; border-radius: 10px;
+  border: 1px solid var(--axis); background: var(--surface-1); font-size: 15px;
+}
+.choices input:checked + span {
+  border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); font-weight: 600;
+  background: var(--surface-2); background: color-mix(in srgb, var(--accent) 12%, var(--surface-1));
+}
+.choices input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
 .input {
   width: 100%; min-height: 44px; padding: 0 12px; border-radius: 10px;
   border: 1px solid var(--axis); background: var(--surface-1);
@@ -136,7 +149,7 @@ button, input { font: inherit; color: inherit; }
 .ico-free { color: var(--good); }
 .ico-warning { color: var(--warning); stroke-width: 2; }
 .ico-critical { color: var(--critical); stroke-width: 2; }
-.ico-booking, .ico-closed, .ico-unknown, .ico-lock { color: var(--text-muted); }
+.ico-booking, .ico-closed, .ico-unknown, .ico-lock, .ico-info { color: var(--text-muted); }
 
 /* ---------- lock screen ---------- */
 .lock { min-height: 100vh; min-height: 100dvh; display: grid; place-items: center; padding: 24px 16px; }
@@ -186,15 +199,28 @@ button, input { font: inherit; color: inherit; }
 .rows { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 14px; }
 .rows th { text-align: left; font-weight: 500; font-size: 12px; color: var(--text-muted); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--grid); white-space: nowrap; }
 .rows td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--grid); vertical-align: top; }
+/* The last column ends where the card's own padding begins: on a phone those pixels are needed. */
+.rows th:last-child, .rows td:last-child { padding-right: 0; }
 .rows tr:last-child td { border-bottom: 0; }
 .rows .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 16px; }
 .rows .num:last-child { padding-right: 0; }
 .rows .date { white-space: nowrap; }
 .rows tr.year th { padding-top: 14px; font-size: 12px; font-weight: 650; color: var(--text-secondary); }
 .rows .state { display: inline-flex; align-items: flex-start; gap: 6px; }
-.rows .sub { display: block; color: var(--text-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
+/* Second lines give way first: they wrap when the screen is narrow or the device's font is
+   wide, so that dates and numbers stay whole and the table stays inside the page. */
+.rows .sub { display: block; color: var(--text-muted); font-size: 12px; font-weight: 400; white-space: normal; }
 .rows .state .ico { margin-top: 2px; }
 .rows tr.current td { font-weight: 600; }
+/* Narrow phones: four columns of dates and words have to fit in under 300px. The gaps
+   between columns give first, with the state's icon (the word beside it says the same),
+   then the text by one pixel; past that the box scrolls. */
+@media (max-width: 400px) {
+  .rows th, .rows td { padding-right: 6px; }
+  .rows .num { padding-right: 8px; }
+  .rows .state .ico { display: none; }
+}
+@media (max-width: 370px) { .rows { font-size: 13px; } }
 .empty { color: var(--text-secondary); font-size: 14px; margin-top: 8px; }
 .more { margin-top: 6px; }
 
@@ -277,6 +303,14 @@ button, input { font: inherit; color: inherit; }
 .bar.family.pending .tag, .bar.family.unknown .tag, .bar.family.conflict .tag { background: var(--hue); color: var(--on-series); }
 .bar.cut-l { border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 4px; }
 .bar.cut-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+/* Two family periods sharing nights: the stretches touch, so their meeting edges are
+   square, and the house's mark is not repeated at each one. */
+.bar.join-l {
+  border-top-left-radius: 0; border-bottom-left-radius: 0; padding-left: 6px;
+  box-shadow: inset 1px 0 0 var(--surface-1); /* a hairline where someone arrives or leaves */
+}
+.bar.join-r { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.bar.join-l .tag { display: none; }
 .bar.past { opacity: 0.45; }
 .single .tag { min-width: 20px; height: 20px; font-size: 11px; }
 .single .bar { font-size: 12px; padding-left: 3px; }
