@@ -200,9 +200,11 @@ secret.
    grande). Vanno bene JPEG, PNG e WebP fino a 20 MB; non il formato HEIC di iPhone.
 2. Caricarle nel bucket, nella stessa cartella del foglio, con il nome
    `<id della casa>.jpg`, dove l'id è quello di `properties.toml`: `santa.jpg` e
-   `vassena.jpg`.
+   `vassena.jpg`, in minuscolo. Il job le cerca anche con le estensioni `.jpeg`, `.png`
+   e `.webp`.
 3. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare
-   `foto: lette (santa, vassena)`.
+   `foto: lette (santa, vassena)`; per una casa di cui non trova il file scrive
+   `foto: nessun file per …`, senza che sia un errore.
 
 Il job non pubblica il file così com'è. Ne ricava un'immagine piccola (lato lungo di
 840 pixel, al più 64 KB) e senza i dati che la fotocamera scrive nel file (luogo, data,

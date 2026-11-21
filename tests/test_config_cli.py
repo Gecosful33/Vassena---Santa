@@ -379,8 +379,10 @@ def test_sync_publishes_the_costs_it_reads_from_the_bucket(monkeypatch, capsys, 
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     assert bucket.asked[0] == (*BUCKET_ENV.values(), {})
     assert "spese: lette" in printed and "degraded=false" in outputs
-    # No photo is kept beside the workbook: the houses have none, and that is no fault.
-    assert family["photos"] == {} and "foto" not in printed
+    # No photo is kept beside the workbook: the houses have none. That is no fault, and the log
+    # says so in a line of its own, where a photo uploaded under another name would be looked for.
+    assert family["photos"] == {}
+    assert "foto: nessun file per santa, vassena (atteso <casa>.jpg accanto al foglio delle spese)" in printed
     costs = published_figures(tmp_path)["costs"]
     assert [sheet["year"] for sheet in costs] == [2026]
     assert costs[0]["lines"][0] == {"label": "TARI", "amounts": {"vassena": 54000, "santa": 18000}, "note": "saldo a dicembre"}
@@ -405,12 +407,13 @@ def test_sync_publishes_the_photos_kept_beside_the_workbook(monkeypatch, capsys,
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     folder = BUCKET_ENV["COSTS_R2_URL"].rsplit("/", 1)[0]
     assert [(url, limits) for url, _, _, limits in bucket.asked[1:]] == [
-        (f"{folder}/santa.jpg", {"max_bytes": MAX_SOURCE_BYTES}),
-        (f"{folder}/vassena.jpg", {"max_bytes": MAX_SOURCE_BYTES}),
+        (f"{folder}/{name}", {"max_bytes": MAX_SOURCE_BYTES})
+        for name in ("santa.jpg", "vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp")
     ]
     # The house with a file has its picture, made small; the other one has none.
     assert family["photos"] == {"santa": prepare(source).to_dict()}
-    assert "foto: lette (santa)" in printed and "degraded=false" in outputs
+    assert "foto: lette (santa)" in printed and "foto: nessun file per vassena" in printed
+    assert "degraded=false" in outputs
     assert "photos" not in published_figures(tmp_path)
 
 

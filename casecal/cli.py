@@ -166,6 +166,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
         report.warnings["foto"] = photos.warnings
     if photos.fresh:
         _say(f"foto: lette ({', '.join(photos.fresh)})")
+    if photos.absent:
+        # Not a fault, yet worth a line: a photo uploaded under another name is found here.
+        _say(f"foto: nessun file per {', '.join(photos.absent)} (atteso <casa>.jpg accanto al foglio delle spese)")
     # The owner's alert: written by the workflow's own token (ALERTS_TOKEN), so that
     # GitHub notifies the owner; a token of the owner's would write as the owner.
     alert, alert_problem = alert_owner(

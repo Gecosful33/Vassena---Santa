@@ -39,7 +39,7 @@ from .model import (
     Snapshot,
     properties_from_payloads,
 )
-from .photos import MAX_SOURCE_BYTES, Photo, PhotoError, photos_from_payload, prepare
+from .photos import FILE_ENDINGS, MAX_SOURCE_BYTES, Photo, PhotoError, photos_from_payload, prepare
 from .site import SiteError, fetch_published_envelope, render_page, write_site
 
 Fetcher = Callable[[PropertyConfig, PortalCredentials, Sequence[int], datetime], PropertySnapshot]
@@ -287,6 +287,7 @@ class PhotosState:
     photos: dict[str, Photo]
     warnings: list[str]
     fresh: list[str] = field(default_factory=list)  # the houses whose photo was read in this run
+    absent: list[str] = field(default_factory=list)  # the houses with no file in the bucket
 
 
 def photos_state(
@@ -300,11 +301,13 @@ def photos_state(
 ) -> PhotosState:
     """A photo of each house, from the bucket that holds the workbook of costs.
 
-    The photo of a house is the file ``<house id>.jpg`` kept beside the
+    The photo of a house is the file named after the house's id (``santa.jpg``,
+    or one of the other endings a photo is saved with) kept beside the
     workbook: ``url`` is the workbook's address, and tells where to look. A
-    house without such a file simply has no photo. One that cannot be fetched,
-    or is not a photo, keeps the picture already published and flags the run;
-    like the costs, nothing about the photos can stop the calendar.
+    house without such a file simply has no photo; that is no fault, and is
+    only noted. A file that cannot be fetched, or is not a photo, keeps the
+    picture already published and flags the run; like the costs, nothing about
+    the photos can stop the calendar.
     """
     given = [bool(url), bool(key_id), bool(secret)]
     if not any(given):
@@ -313,16 +316,27 @@ def photos_state(
         # Said once already, where the costs are read: here it only means "leave things as they are".
         return PhotosState(dict(load_previous().photos), [])
 
+    def stored(house: str) -> bytes | None:
+        """The file kept for this house, under the first of its possible names; None if there is none."""
+        for ending in FILE_ENDINGS:
+            try:
+                return (fetch or r2.fetch)(r2.sibling(url, house + ending), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+            except r2.NotFound:
+                continue
+        return None
+
     photos: dict[str, Photo] = {}
     fresh: list[str] = []
+    absent: list[str] = []
     failed: dict[str, list[str]] = {}  # reason -> houses
     for prop in config.properties:
         try:
-            raw = (fetch or r2.fetch)(r2.sibling(url, f"{prop.id}.jpg"), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+            raw = stored(prop.id)
+            if raw is None:
+                absent.append(prop.id)  # no photo of this house: nothing to show
+                continue
             photos[prop.id] = prepare(raw)
             fresh.append(prop.id)
-        except r2.NotFound:
-            continue  # no photo of this house: nothing to show, nothing to report
         except (r2.StorageError, PhotoError) as exc:
             failed.setdefault(str(exc), []).append(prop.id)  # written to be public
         except Exception as exc:  # noqa: BLE001 - the calendar comes first
@@ -336,7 +350,7 @@ def photos_state(
                 if house in published:
                     photos[house] = published[house]
             warnings.append(f"foto non lette ({reason}): {', '.join(houses)}; restano quelle già pubblicate")
-    return PhotosState(photos, warnings, fresh)
+    return PhotosState(photos, warnings, fresh, absent)
 
 
 def alert_owner(

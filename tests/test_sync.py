@@ -411,10 +411,27 @@ def test_each_house_has_the_photo_kept_under_its_name_beside_the_workbook():
 
 def test_a_house_without_a_photo_simply_has_none():
     fetch = bucket({"vassena.jpg": picture()})
-    # Even if one was online: the owner took it away.
+    # Even if one was online: the owner took it away. No fault, so no warning; only a note of which house.
     state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
     assert set(state.photos) == {"vassena"} and state.fresh == ["vassena"] and state.warnings == []
-    assert photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=bucket({})) == PhotosState({}, [], [])
+    assert state.absent == ["santa"]
+    nothing = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=bucket({}))
+    assert nothing == PhotosState({}, [], [], ["santa", "vassena"])
+
+
+def test_a_photo_is_found_under_any_of_the_endings_a_photo_is_saved_with():
+    # A phone says ".jpeg" as often as ".jpg"; a screenshot is a ".png".
+    fetch = bucket({"santa.jpeg": picture((900, 600)), "santa.png": picture((300, 200), "PNG"), "vassena.webp": picture((600, 400), "WEBP")})
+    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
+    assert [url.rsplit("/", 1)[1] for url, *_ in fetch.asked] == [
+        "santa.jpg", "santa.jpeg",                                    # the first one found is the photo
+        "vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp",
+    ]
+    assert state.photos == {"santa": prepare(picture((900, 600))), "vassena": prepare(picture((600, 400), "WEBP"))}
+    assert state.fresh == ["santa", "vassena"] and state.absent == [] and state.warnings == []
+    # Other names are not looked for: capitals, or the name the phone gave the file.
+    other = bucket({"Santa.jpg": picture(), "IMG_0001.jpeg": picture()})
+    assert photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=other).absent == ["santa", "vassena"]
 
 
 def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published():
@@ -457,7 +474,8 @@ def test_the_photos_are_read_through_the_signed_fetch_unless_told_otherwise(monk
     fetch = bucket({"santa.jpg": picture()})
     monkeypatch.setattr(r2, "fetch", fetch)
     state = photos_state(CONFIG, **BUCKET, load_previous=no_previous)
-    assert state.fresh == ["santa"] and len(fetch.asked) == 2
+    assert state.fresh == ["santa"] and state.absent == ["vassena"]
+    assert len(fetch.asked) == 1 + 4  # the first house's file at once, the other's under every ending
 
 
 def test_the_photos_travel_with_the_calendar_and_are_recovered_from_the_published_page(tmp_path, monkeypatch):

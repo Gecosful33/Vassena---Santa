@@ -27,6 +27,9 @@ BUDGET_BYTES = 64 * 1024  # every byte is downloaded with the page, at every vis
 MIME = "image/webp"
 # What a file may be to be read at all: the formats a phone or a computer saves a photo in.
 _SOURCE_FORMATS = {"JPEG", "MPO", "PNG", "WEBP"}
+# The names a house's photo is looked for under, after the house's id: phones say
+# ".jpeg" as often as ".jpg". The first one found is the photo.
+FILE_ENDINGS = (".jpg", ".jpeg", ".png", ".webp")
 _QUALITIES = (72, 64, 56, 48)
 
 
