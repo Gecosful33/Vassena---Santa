@@ -77,9 +77,10 @@ jobs:
           FAMILY_GROUPS: ${{ secrets.FAMILY_GROUPS }}
           OLD_FAMILY_PASSPHRASE: ${{ secrets.OLD_FAMILY_PASSPHRASE }}
           OWNER_PASSPHRASE: ${{ secrets.OWNER_PASSPHRASE }}
-          # Facoltativi, tutti e tre insieme: accendono il P&L. Il foglio Excel delle spese
-          # sta in un bucket privato di Cloudflare R2 (il repository è pubblico: qui non può
-          # stare); il job lo scarica con una chiave di sola lettura (vedi README).
+          # Facoltativi, tutti e tre insieme: accendono il P&L e le foto delle case. Il foglio
+          # Excel delle spese e le foto stanno in un bucket privato di Cloudflare R2 (il
+          # repository è pubblico: qui non possono stare); il job li scarica con una chiave
+          # di sola lettura (vedi README, passi 7 e 8).
           COSTS_R2_URL: ${{ secrets.COSTS_R2_URL }}
           COSTS_R2_ACCESS_KEY_ID: ${{ secrets.COSTS_R2_ACCESS_KEY_ID }}
           COSTS_R2_SECRET_ACCESS_KEY: ${{ secrets.COSTS_R2_SECRET_ACCESS_KEY }}

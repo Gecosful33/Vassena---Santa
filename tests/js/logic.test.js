@@ -49,6 +49,27 @@ test("a house that could not be read is unknown and lists no guests", () => {
   assert.deepEqual(L.upcomingGuests(p, day("2026-08-01")), []);
 });
 
+test("a house's photo is shown only if it is what the nightly job makes", () => {
+  const data = "UklGRhoAAABXRUJQVlA4IA4AAAAwAQCdASoBAAEAAQAcJaQAA3AA/v3AgAA=";
+  assert.deepEqual(L.photoUrls({ mare: { type: "image/webp", data }, lago: { type: "image/webp", data: "QUJD" } }),
+    { mare: "data:image/webp;base64," + data, lago: "data:image/webp;base64,QUJD" });
+  // Anything else is left out: another format (one that can carry a script, most of all),
+  // text that is not base64, a value of the wrong kind.
+  assert.deepEqual(L.photoUrls({
+    svg: { type: "image/svg+xml", data },
+    html: { type: "text/html", data },
+    jpeg: { type: "image/jpeg", data },
+    quote: { type: "image/webp", data: 'AAAA" onerror="alert(1)' },
+    spaces: { type: "image/webp", data: "AAAA AAAA" },
+    empty: { type: "image/webp", data: "" },
+    number: { type: "image/webp", data: 7 },
+    missing: { type: "image/webp" },
+    none: null,
+    text: "image/webp"
+  }), {});
+  for (const odd of [undefined, null, "foto", 7, []]) assert.deepEqual(L.photoUrls(odd), {});
+});
+
 test("the guests to come are the stays with guests that have not ended, soonest first", () => {
   const p = house([
     ["2026-07-20", "2026-07-25", "b"],                 // gone

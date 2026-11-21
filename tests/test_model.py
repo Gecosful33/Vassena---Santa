@@ -20,6 +20,7 @@ from casecal.model import (
     stays_from_nights,
     to_cents,
 )
+from casecal.photos import Photo
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
 
@@ -196,6 +197,14 @@ def test_the_family_layer_travels_in_the_family_payload():
     assert set(plain.owner_payload()) == {"v", "properties", "costs"}  # nothing of it with the figures
     named = Snapshot(generated_at=NOW, properties=[snapshot()], groups=["Famiglia Rossi", "Famiglia Bianchi"])
     assert named.family_payload()["groups"] == ["Famiglia Rossi", "Famiglia Bianchi"]
+
+
+def test_the_houses_photos_travel_with_the_calendar():
+    plain = Snapshot(generated_at=NOW, properties=[snapshot()])
+    assert plain.family_payload()["photos"] == {}
+    pictured = Snapshot(generated_at=NOW, properties=[snapshot()], photos={"santa": Photo(b"webp bytes")})
+    assert pictured.family_payload()["photos"] == {"santa": {"type": "image/webp", "data": "d2VicCBieXRlcw=="}}
+    assert "photos" not in pictured.owner_payload() and "d2VicCBieXRlcw" not in repr(pictured.owner_payload())
 
 
 def test_published_payloads_restore_the_same_snapshot():

@@ -33,6 +33,10 @@ class StorageError(RuntimeError):
     """The object could not be read. The message is safe for a public log."""
 
 
+class NotFound(StorageError):
+    """Nothing is kept under that name."""
+
+
 def _hmac(key: bytes, message: str) -> bytes:
     return hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest()
 
@@ -103,6 +107,12 @@ def _target(url: str) -> tuple[str, str]:
     return host, path
 
 
+def sibling(url: str, name: str) -> str:
+    """The address of the object called ``name`` kept beside the one at ``url``: same bucket, same folder."""
+    host, path = _target(url)
+    return f"https://{host}{path.rsplit('/', 1)[0]}/{quote(name, safe='-_.~')}"
+
+
 def fetch(
     url: str,
     key_id: str,
@@ -110,8 +120,13 @@ def fetch(
     *,
     session: requests.Session | None = None,
     now: datetime | None = None,
+    max_bytes: int = MAX_BYTES,
 ) -> bytes:
-    """The bytes of the object at ``url``. Raises ``StorageError`` with a message fit for a public log."""
+    """The bytes of the object at ``url``.
+
+    Raises ``StorageError`` with a message fit for a public log; ``NotFound``
+    when nothing is kept under that name.
+    """
     host, path = _target(url)
     when = now or datetime.now(timezone.utc)
     headers = {
@@ -134,14 +149,14 @@ def fetch(
             if status in (401, 403):
                 raise StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
             if status == 404:
-                raise StorageError("file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL")
+                raise NotFound("file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL")
             if status != 200:
                 raise StorageError(f"HTTP {status}")
             body = bytearray()
             for chunk in response.iter_content(chunk_size=65536):
                 body.extend(chunk)
-                if len(body) > MAX_BYTES:
-                    raise StorageError(f"file troppo grande (oltre {MAX_BYTES // (1024 * 1024)} MB)")
+                if len(body) > max_bytes:
+                    raise StorageError(f"file troppo grande (oltre {max_bytes // (1024 * 1024)} MB)")
             return bytes(body)
     except requests.RequestException as exc:
         raise StorageError(f"Cloudflare R2 non raggiungibile ({type(exc).__name__})") from None

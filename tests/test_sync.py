@@ -11,16 +11,20 @@ from casecal.crypto import AAD_OWNER, derive_key, encrypt_json, open_envelope
 from casecal.errors import LayoutError, LoginError, SyncAborted
 from casecal.model import MissingProperty, MonthKpi, PropertySnapshot, Snapshot, Stay
 from casecal.site import extract_envelope
+from casecal.photos import MAX_SOURCE_BYTES, Photo, prepare
 from casecal.sync import (
     CostsState,
+    PhotosState,
     PreviousPage,
     collect,
     costs_state,
     describe_error,
+    photos_state,
     previous_from_site,
     publish,
     target_years,
 )
+from pictures import picture
 from workbooks import workbook, year_rows
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
@@ -361,3 +365,113 @@ def test_the_costs_travel_with_the_figures_and_are_recovered_from_the_published_
     older = _published_envelope(tmp_path / "older", Snapshot(generated_at=NOW, properties=[house("santa")]))
     monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: older)
     assert previous_from_site("https://x.example", passphrase=FAMILY).costs == []
+
+
+# --------------------------------------------------------------------------- the houses' photos
+
+ONLINE = {"santa": Photo(b"the picture of santa already online"), "vassena": Photo(b"the picture of vassena already online")}
+FOLDER = "https://acc.r2.cloudflarestorage.com/case-private"
+
+
+def published_with_photos() -> PreviousPage:
+    return PreviousPage(photos=dict(ONLINE))
+
+
+def bucket(files):
+    """A stand-in for the bucket: ``files`` maps a file name to its bytes, or to the error asking for it raises."""
+    asked = []
+
+    def fetch(url, key_id, secret, *, max_bytes):
+        asked.append((url, key_id, secret, max_bytes))
+        held = files.get(url.rsplit("/", 1)[1], r2.NotFound("file non trovato"))
+        if isinstance(held, Exception):
+            raise held
+        return held
+
+    fetch.asked = asked
+    return fetch
+
+
+def test_without_the_buckets_settings_there_are_no_photos_and_nothing_to_report():
+    state = photos_state(CONFIG, url=None, key_id=None, secret=None, load_previous=no_previous, fetch=never_fetched)
+    assert state == PhotosState({}, [], [])
+
+
+def test_each_house_has_the_photo_kept_under_its_name_beside_the_workbook():
+    fetch = bucket({"santa.jpg": picture((1600, 1200)), "vassena.jpg": picture((1200, 1600), "PNG")})
+    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
+    assert fetch.asked == [
+        (f"{FOLDER}/santa.jpg", BUCKET["key_id"], BUCKET["secret"], MAX_SOURCE_BYTES),
+        (f"{FOLDER}/vassena.jpg", BUCKET["key_id"], BUCKET["secret"], MAX_SOURCE_BYTES),
+    ]
+    assert state.fresh == ["santa", "vassena"] and state.warnings == []
+    assert state.photos == {"santa": prepare(picture((1600, 1200))), "vassena": prepare(picture((1200, 1600), "PNG"))}
+    assert all(photo.mime == "image/webp" for photo in state.photos.values())
+
+
+def test_a_house_without_a_photo_simply_has_none():
+    fetch = bucket({"vassena.jpg": picture()})
+    # Even if one was online: the owner took it away.
+    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
+    assert set(state.photos) == {"vassena"} and state.fresh == ["vassena"] and state.warnings == []
+    assert photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=bucket({})) == PhotosState({}, [], [])
+
+
+def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published():
+    refused = r2.StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
+    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos, fetch=bucket({"santa.jpg": refused, "vassena.jpg": refused}))
+    assert state.photos == ONLINE and state.fresh == []
+    assert state.warnings == [
+        "foto non lette (chiave rifiutata, oppure senza il permesso di lettura su questo bucket): "
+        "santa, vassena; restano quelle già pubblicate"
+    ]  # one cause, said once
+
+    # One file is not a photo: the other house is read as usual.
+    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos,
+                         fetch=bucket({"santa.jpg": b"an .heic renamed", "vassena.jpg": picture()}))
+    assert state.photos == {"santa": ONLINE["santa"], "vassena": prepare(picture())} and state.fresh == ["vassena"]
+    assert state.warnings == [
+        "foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP)): santa; restano quelle già pubblicate"
+    ]
+
+    # Whatever else goes wrong must not stop the calendar, nor reach the public log in full.
+    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos,
+                         fetch=bucket({"santa.jpg": RuntimeError(f"boom {BUCKET['secret']}"), "vassena.jpg": picture()}))
+    assert state.photos["santa"] == ONLINE["santa"] and state.fresh == ["vassena"]
+    assert state.warnings[0].startswith("foto non lette (RuntimeError (sync.py:") and BUCKET["secret"] not in state.warnings[0]
+
+    # With nothing published yet there is no picture to keep.
+    state = photos_state(CONFIG, **BUCKET, load_previous=PreviousPage, fetch=bucket({"santa.jpg": refused}))
+    assert state.photos == {} and len(state.warnings) == 1
+
+
+@pytest.mark.parametrize("missing", ["url", "key_id", "secret"])
+def test_an_incomplete_setting_leaves_the_photos_as_they_are(missing):
+    # The costs, read with the same settings, have already said what is missing.
+    settings = {**BUCKET, missing: None}
+    state = photos_state(CONFIG, **settings, load_previous=published_with_photos, fetch=never_fetched)
+    assert state == PhotosState(ONLINE, [], [])
+
+
+def test_the_photos_are_read_through_the_signed_fetch_unless_told_otherwise(monkeypatch):
+    fetch = bucket({"santa.jpg": picture()})
+    monkeypatch.setattr(r2, "fetch", fetch)
+    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous)
+    assert state.fresh == ["santa"] and len(fetch.asked) == 2
+
+
+def test_the_photos_travel_with_the_calendar_and_are_recovered_from_the_published_page(tmp_path, monkeypatch):
+    photos = {"santa": prepare(picture())}
+    snapshot = Snapshot(generated_at=NOW, properties=[house("santa"), house("vassena")], photos=photos)
+    envelope = _published_envelope(tmp_path, snapshot)
+    family, figures = open_envelope(envelope, passphrase=FAMILY)
+    assert family["photos"] == {"santa": photos["santa"].to_dict()}
+    assert "photos" not in figures
+    monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: envelope)
+    assert previous_from_site("https://x.example", passphrase=FAMILY).photos == photos
+    # A page published before the photos existed simply has none.
+    older = _published_envelope(tmp_path / "older", Snapshot(generated_at=NOW, properties=[house("santa")]))
+    older_family, _ = open_envelope(older, passphrase=FAMILY)
+    assert older_family["photos"] == {}
+    monkeypatch.setattr(sync, "fetch_published_envelope", lambda url: older)
+    assert previous_from_site("https://x.example", passphrase=FAMILY).photos == {}

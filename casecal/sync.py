@@ -39,6 +39,7 @@ from .model import (
     Snapshot,
     properties_from_payloads,
 )
+from .photos import MAX_SOURCE_BYTES, Photo, PhotoError, photos_from_payload, prepare
 from .site import SiteError, fetch_published_envelope, render_page, write_site
 
 Fetcher = Callable[[PropertyConfig, PortalCredentials, Sequence[int], datetime], PropertySnapshot]
@@ -52,6 +53,7 @@ class PreviousPage:
     entries: list[FamilyEntry] = field(default_factory=list)
     log: dict[str, Any] | None = None
     costs: list[CostSheet] = field(default_factory=list)
+    photos: dict[str, Photo] = field(default_factory=dict)
 
 
 PreviousLoader = Callable[[], PreviousPage]
@@ -182,6 +184,7 @@ def previous_from_site(
         entries=entries,
         log=log if isinstance(log, dict) else None,
         costs=sheets_from_payload((owner or {}).get("costs")),
+        photos=photos_from_payload(family.get("photos")),
     )
 
 
@@ -275,6 +278,65 @@ def costs_state(
     except Exception as exc:  # noqa: BLE001 - the calendar comes first
         return kept(describe_error(exc))
     return CostsState(sheets, warnings, fresh=True)
+
+
+@dataclass
+class PhotosState:
+    """The houses' photos for the page, and what went wrong reading them."""
+
+    photos: dict[str, Photo]
+    warnings: list[str]
+    fresh: list[str] = field(default_factory=list)  # the houses whose photo was read in this run
+
+
+def photos_state(
+    config: Config,
+    *,
+    url: str | None,
+    key_id: str | None,
+    secret: str | None,
+    load_previous: PreviousLoader,
+    fetch: Callable[..., bytes] | None = None,
+) -> PhotosState:
+    """A photo of each house, from the bucket that holds the workbook of costs.
+
+    The photo of a house is the file ``<house id>.jpg`` kept beside the
+    workbook: ``url`` is the workbook's address, and tells where to look. A
+    house without such a file simply has no photo. One that cannot be fetched,
+    or is not a photo, keeps the picture already published and flags the run;
+    like the costs, nothing about the photos can stop the calendar.
+    """
+    given = [bool(url), bool(key_id), bool(secret)]
+    if not any(given):
+        return PhotosState({}, [])
+    if not all(given):
+        # Said once already, where the costs are read: here it only means "leave things as they are".
+        return PhotosState(dict(load_previous().photos), [])
+
+    photos: dict[str, Photo] = {}
+    fresh: list[str] = []
+    failed: dict[str, list[str]] = {}  # reason -> houses
+    for prop in config.properties:
+        try:
+            raw = (fetch or r2.fetch)(r2.sibling(url, f"{prop.id}.jpg"), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+            photos[prop.id] = prepare(raw)
+            fresh.append(prop.id)
+        except r2.NotFound:
+            continue  # no photo of this house: nothing to show, nothing to report
+        except (r2.StorageError, PhotoError) as exc:
+            failed.setdefault(str(exc), []).append(prop.id)  # written to be public
+        except Exception as exc:  # noqa: BLE001 - the calendar comes first
+            failed.setdefault(describe_error(exc), []).append(prop.id)
+
+    warnings: list[str] = []
+    if failed:
+        published = load_previous().photos
+        for reason, houses in failed.items():
+            for house in houses:
+                if house in published:
+                    photos[house] = published[house]
+            warnings.append(f"foto non lette ({reason}): {', '.join(houses)}; restano quelle già pubblicate")
+    return PhotosState(photos, warnings, fresh)
 
 
 def alert_owner(

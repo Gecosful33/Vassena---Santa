@@ -376,6 +376,8 @@ class Snapshot:
     groups: list[str] = field(default_factory=list)
     # The houses' running costs, one sheet per year (see costs.py). Empty: no P&L.
     costs: list[Any] = field(default_factory=list)
+    # A small picture of each house, by house id (see photos.py). A house may have none.
+    photos: dict[str, Any] = field(default_factory=dict)
 
     def family_payload(self) -> dict[str, Any]:
         return {
@@ -389,6 +391,8 @@ class Snapshot:
             "entries": [entry.to_dict() for entry in self.entries],
             "log": self.log,
             "groups": list(self.groups),
+            # With the calendar: a photo says which house this is, nothing about its figures.
+            "photos": {house: photo.to_dict() for house, photo in self.photos.items()},
         }
 
     def owner_payload(self) -> dict[str, Any]:

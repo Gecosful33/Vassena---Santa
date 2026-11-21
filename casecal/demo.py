@@ -16,6 +16,8 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
+from PIL import Image, ImageDraw
+
 from .costs import CostLine, CostSheet
 from .family import FamilyEntry
 from .model import (
@@ -30,6 +32,7 @@ from .model import (
     Stay,
     YearTotal,
 )
+from .photos import Photo, encode
 
 DEMO_PASSPHRASE = "demo-calendario-delle-case"
 
@@ -211,6 +214,40 @@ def _demo_costs(years: tuple[int, int]) -> list[CostSheet]:
     return [sheet(years[0], 100, date(years[0], 9, 1)), sheet(years[1], 104, date(years[0], 11, 2))]
 
 
+def _demo_photo(lake: bool) -> Photo:
+    """A drawing of an invented house: by the sea, or on a lake under the mountains.
+
+    Drawn, not photographed, so that nobody takes the demo for a real place.
+    """
+    width, height = 840, 560
+    image = Image.new("RGB", (width, height), (176, 214, 240))
+    draw = ImageDraw.Draw(image)
+    for y in range(300):  # a sky that pales towards the horizon
+        shade = y / 300
+        draw.line([(0, y), (width, y)], fill=(int(120 + 70 * shade), int(175 + 45 * shade), int(232 + 12 * shade)))
+    if lake:
+        draw.polygon([(0, 300), (150, 110), (330, 300)], fill=(104, 124, 112))
+        draw.polygon([(210, 300), (470, 60), (720, 300)], fill=(122, 140, 124))
+        draw.polygon([(560, 300), (760, 150), (840, 230), (840, 300)], fill=(96, 118, 108))
+        draw.polygon([(410, 132), (470, 60), (528, 126), (488, 118), (462, 140), (440, 116)], fill=(244, 246, 248))
+        draw.rectangle([0, 300, width, 372], fill=(72, 140, 150))
+        draw.rectangle([0, 372, width, height], fill=(108, 164, 84))
+        walls, roof, shutters = (246, 240, 226), (92, 78, 70), (40, 110, 96)
+    else:
+        draw.ellipse([640, 60, 740, 160], fill=(255, 226, 150))
+        draw.rectangle([0, 300, width, 400], fill=(48, 122, 176))
+        for y in (322, 348, 378):
+            draw.line([(40, y), (800, y)], fill=(120, 176, 214), width=3)
+        draw.rectangle([0, 400, width, height], fill=(232, 210, 164))
+        walls, roof, shutters = (250, 244, 232), (196, 98, 62), (52, 100, 150)
+    draw.rectangle([270, 250, 570, 470], fill=walls)
+    draw.polygon([(240, 250), (420, 150), (600, 250)], fill=roof)
+    for left in (310, 470):
+        draw.rectangle([left, 300, left + 60, 380], fill=shutters)
+    draw.rectangle([395, 370, 445, 470], fill=roof)
+    return Photo(encode(image, 72))
+
+
 def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant: str = "ok") -> Snapshot:
     """Two invented houses around ``now``.
 
@@ -266,4 +303,5 @@ def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant:
         # Edits made in the demo stay in the browser that made them.
         log={"kind": "local"},
         costs=_demo_costs(years),
+        photos={"mare": _demo_photo(lake=False), "lago": _demo_photo(lake=True)},
     )

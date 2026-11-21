@@ -278,6 +278,15 @@ async function main() {
     }, label);
   }
   const houseShown = (page) => page.locator(".house h3").innerText();
+  /** The photo at the top of the house on show: what it is, whether it decoded, where it sits. */
+  const housePhoto = (page) => page.locator(".house .house-photo img").evaluate((img) => {
+    const box = (node) => { const r = node.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
+    return {
+      loaded: img.complete && img.naturalWidth > 0, natural: [img.naturalWidth, img.naturalHeight], alt: img.alt, src: img.src,
+      box: box(img), card: box(img.closest(".house")), head: box(img.closest(".house").querySelector(".house-head")),
+      fit: getComputedStyle(img).objectFit
+    };
+  });
   const figures = (page) => page.locator("section.card", { hasText: "Area proprietà" });
 
   /* ---- helpers for the profit and loss ---- */
@@ -395,6 +404,28 @@ async function main() {
   assert.equal(await houseShown(page), "Casa Mare");
   assert.equal(await page.locator(".house").count(), 1);
   assert.equal(await page.locator(".months.single").count(), 1);
+  // Which house is which can be seen before anything is read: each tab carries the house's
+  // photo, ringed in its colour, and the house on show has it at the top of its card.
+  const thumbs = await page.locator(".seg input[name=house] + span").evaluateAll((faces) => faces.map((face) => {
+    const img = face.querySelector("img.thumb");
+    return img && { loaded: img.complete && img.naturalWidth > 0, src: img.src, alt: img.alt, size: [img.offsetWidth, img.offsetHeight],
+      ring: getComputedStyle(img).boxShadow };
+  }));
+  assert.equal(thumbs[2], null, "the P&L is not a house: no photo");
+  assert.ok(thumbs[0].loaded && thumbs[1].loaded, "the photos on the tabs decode");
+  assert.ok(thumbs[0].src.startsWith("data:image/webp;base64,") && thumbs[0].src !== thumbs[1].src, "each house has its own");
+  assert.deepEqual([thumbs[0].size, thumbs[1].size], [[22, 22], [22, 22]]);
+  assert.deepEqual([thumbs[0].alt, thumbs[1].alt], ["", ""], "the name beside the photo already says which house");
+  assert.match(thumbs[0].ring, /rgb\(98, 80, 214\)/);
+  assert.match(thumbs[1].ring, /rgb\(235, 104, 52\)/);
+  assert.equal(await page.locator(".seg .swatch").count(), 0, "the photo takes the place of the plain swatch");
+  const seaPhoto = await housePhoto(page);
+  assert.ok(seaPhoto.loaded, "the photo of the house decodes");
+  assert.deepEqual([seaPhoto.alt, seaPhoto.natural, seaPhoto.fit], ["Foto di Casa Mare", [840, 560], "cover"]);
+  assert.equal(seaPhoto.src, thumbs[0].src, "the same picture as on the tab");
+  // On a wide screen it stands beside the guests, inside the card.
+  assert.ok(seaPhoto.box.left >= seaPhoto.card.left && seaPhoto.box.right <= seaPhoto.head.left, "photo beside the house's name");
+  assert.ok(Math.abs(seaPhoto.box.width / seaPhoto.box.height - 1.5) < 0.02 && seaPhoto.box.bottom <= seaPhoto.card.bottom);
   assert.ok(!/Tutte/.test(await page.locator("#app").innerText()), "no view of all the houses together");
   // No second lock: the figures open with the same password.
   assert.equal(await page.locator("input[type=password]").count(), 0, "no second password inside the page");
@@ -436,10 +467,11 @@ async function main() {
   await page.locator('[data-key="guests:mare"]').click();
   assert.equal(await guestRows.count(), 4);
 
-  // The first house is violet, the second orange (its tab says so even while the first is on show);
-  // text on a solid bar is white on the light surface.
+  // The first house is violet, the second orange (the ring around the photo on its tab says so
+  // even while the first is on show); text on a solid bar is white on the light surface.
   const colour = (selector, property) => page.evaluate(([chosen, wanted]) => getComputedStyle(document.querySelector(chosen))[wanted], [selector, property]);
-  assert.deepEqual([await colour(".house.p0 .swatch", "backgroundColor"), await colour(".seg .p1 .swatch", "backgroundColor"),
+  const ringOf = (shadow) => shadow.slice(0, shadow.indexOf(")") + 1); // "rgb(...) 0px 0px 0px 2px" -> its colour
+  assert.deepEqual([await colour(".house.p0 .swatch", "backgroundColor"), ringOf(await colour(".seg .p1 .thumb", "boxShadow")),
     await colour(".lane.p0 .bar.booking", "backgroundColor"), await colour(".lane.p0 .bar.booking", "color")],
   ["rgb(98, 80, 214)", "rgb(235, 104, 52)", "rgb(98, 80, 214)", "rgb(255, 255, 255)"]);
 
@@ -531,6 +563,8 @@ async function main() {
   assert.equal(await page.locator(".lane.p0").count(), 0);
   assert.ok((await page.locator(".lane.p1").count()) > 0, "the house keeps its own hue");
   assert.equal(await colour(".house.p1 .swatch", "backgroundColor"), "rgb(235, 104, 52)");
+  const lakePhoto = await housePhoto(page);
+  assert.ok(lakePhoto.loaded && lakePhoto.alt === "Foto di Casa Lago" && lakePhoto.src === thumbs[1].src, "the other house, the other photo");
   await barsFollowTheHouseHours(page, { turnover: false });
   assert.ok((await page.locator(".months .bar .txt").allTextContents()).includes("Bloccata"), "blocked periods labelled");
   assert.match(await page.locator(".house tbody tr").nth(0).innerText(), /tra 5 giorni/);
@@ -668,12 +702,19 @@ async function main() {
   await page.waitForSelector(".tiles");
   assert.equal(await houseShown(page), "Casa Mare", "a device that never chose starts from the first house");
   assert.equal(await page.locator(".house").count(), 1);
+  // On a phone the photo is a band across the top of the card, edge to edge, above the house's name.
+  const band = await housePhoto(page);
+  assert.ok(band.loaded && band.alt === "Foto di Casa Mare");
+  assert.ok(Math.abs(band.box.width - band.card.width) <= 2.5 && Math.abs(band.box.top - band.card.top) <= 1.5, "edge to edge");
+  assert.ok(band.box.height >= 120 && band.box.height <= 180 && band.box.bottom <= band.head.top, "a band above the name");
+  assert.equal(await page.locator(".seg img.thumb").count(), 2);
   await noSidewaysScroll(page);
   await tablesKeepTheirShape(page, 3);
   // On the dark surface the same two hues are lighter, and the text on a solid bar is dark.
   const darkColours = await page.evaluate(() => {
     const shade = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
-    return [shade(".house.p0 .swatch", "backgroundColor"), shade(".seg .p1 .swatch", "backgroundColor"),
+    const ring = shade(".seg .p1 .thumb", "boxShadow");
+    return [shade(".house.p0 .swatch", "backgroundColor"), ring.slice(0, ring.indexOf(")") + 1),
       shade(".lane.p0 .bar.booking:not(.past)", "color")];
   });
   assert.deepEqual(darkColours, ["rgb(144, 133, 233)", "rgb(217, 89, 38)", "rgb(11, 11, 11)"]);

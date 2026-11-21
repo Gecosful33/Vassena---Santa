@@ -20,7 +20,16 @@ from .config import (
 from .crypto import PassphraseError, check_passphrase, generate_passphrase
 from .errors import SyncAborted
 from .familylog import token_problem
-from .sync import PreviousPage, alert_owner, collect, costs_state, family_state, previous_from_site, publish
+from .sync import (
+    PreviousPage,
+    alert_owner,
+    collect,
+    costs_state,
+    family_state,
+    photos_state,
+    previous_from_site,
+    publish,
+)
 
 EXIT_OK, EXIT_ABORTED, EXIT_CONFIG = 0, 1, 2
 # What was done with the owner's alert, for a log that is public: no counts, no dates.
@@ -144,6 +153,19 @@ def cmd_sync(args: argparse.Namespace) -> int:
         report.warnings["spese"] = costs.warnings
     if costs.fresh:
         _say("spese: lette")
+    # A photo of each house, kept beside that workbook: optional too.
+    photos = photos_state(
+        config,
+        url=os.environ.get("COSTS_R2_URL", "").strip() or None,
+        key_id=os.environ.get("COSTS_R2_ACCESS_KEY_ID", "").strip() or None,
+        secret=os.environ.get("COSTS_R2_SECRET_ACCESS_KEY", "").strip() or None,
+        load_previous=load_previous,
+    )
+    snapshot.photos = photos.photos
+    if photos.warnings:
+        report.warnings["foto"] = photos.warnings
+    if photos.fresh:
+        _say(f"foto: lette ({', '.join(photos.fresh)})")
     # The owner's alert: written by the workflow's own token (ALERTS_TOKEN), so that
     # GitHub notifies the owner; a token of the owner's would write as the owner.
     alert, alert_problem = alert_owner(

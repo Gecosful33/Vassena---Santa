@@ -20,9 +20,11 @@ from casecal.errors import TransportError
 from casecal.family import encode_event
 from casecal.familylog import ISSUE_TITLE, GitHubLog
 from casecal.model import BOOKING, CLOSED, PropertySnapshot
-from casecal.r2 import StorageError
+from casecal.photos import MAX_SOURCE_BYTES, prepare
+from casecal.r2 import NotFound, StorageError
 from casecal.site import extract_envelope
 from github_fake import TOKEN, FakeGitHub
+from pictures import picture
 from workbooks import workbook, year_rows
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -356,17 +358,29 @@ def published_figures(tmp_path):
     return open_envelope(extract_envelope(page), passphrase=GOOD_ENV["FAMILY_PASSPHRASE"])[1]
 
 
-def test_sync_publishes_the_costs_it_reads_from_the_bucket(monkeypatch, capsys, tmp_path):
+def stand_in_bucket(files):
+    """What the bucket answers: ``files`` maps a file name to its bytes; any other name is not there."""
     asked = []
 
-    def bucket(url, key_id, secret):
-        asked.append((url, key_id, secret))
-        return workbook({"2026": year_rows("Vassena", "Santa Margherita")})
+    def fetch(url, key_id, secret, **limits):
+        asked.append((url, key_id, secret, limits))
+        name = url.rsplit("/", 1)[1]
+        if name not in files:
+            raise NotFound("file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL")
+        return files[name]
 
+    fetch.asked = asked
+    return fetch
+
+
+def test_sync_publishes_the_costs_it_reads_from_the_bucket(monkeypatch, capsys, tmp_path):
+    bucket = stand_in_bucket({"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa Margherita")})})
     monkeypatch.setattr("casecal.r2.fetch", bucket)
-    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
-    assert asked == [tuple(BUCKET_ENV.values())]
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
+    assert bucket.asked[0] == (*BUCKET_ENV.values(), {})
     assert "spese: lette" in printed and "degraded=false" in outputs
+    # No photo is kept beside the workbook: the houses have none, and that is no fault.
+    assert family["photos"] == {} and "foto" not in printed
     costs = published_figures(tmp_path)["costs"]
     assert [sheet["year"] for sheet in costs] == [2026]
     assert costs[0]["lines"][0] == {"label": "TARI", "amounts": {"vassena": 54000, "santa": 18000}, "note": "saldo a dicembre"}
@@ -375,19 +389,46 @@ def test_sync_publishes_the_costs_it_reads_from_the_bucket(monkeypatch, capsys, 
 
 
 def test_sync_without_the_settings_of_the_costs_publishes_no_profit_and_loss(monkeypatch, capsys, tmp_path):
-    def never(*settings):
+    def never(*settings, **limits):
         raise AssertionError("the bucket must not be contacted in this scenario")
 
     monkeypatch.setattr("casecal.r2.fetch", never)
-    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None)
-    assert published_figures(tmp_path)["costs"] == []
-    assert "spese" not in printed and "degraded=false" in outputs
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None)
+    assert published_figures(tmp_path)["costs"] == [] and family["photos"] == {}
+    assert "spese" not in printed and "foto" not in printed and "degraded=false" in outputs
+
+
+def test_sync_publishes_the_photos_kept_beside_the_workbook(monkeypatch, capsys, tmp_path):
+    source = picture((1600, 1200))
+    bucket = stand_in_bucket({"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": source})
+    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
+    folder = BUCKET_ENV["COSTS_R2_URL"].rsplit("/", 1)[0]
+    assert [(url, limits) for url, _, _, limits in bucket.asked[1:]] == [
+        (f"{folder}/santa.jpg", {"max_bytes": MAX_SOURCE_BYTES}),
+        (f"{folder}/vassena.jpg", {"max_bytes": MAX_SOURCE_BYTES}),
+    ]
+    # The house with a file has its picture, made small; the other one has none.
+    assert family["photos"] == {"santa": prepare(source).to_dict()}
+    assert "foto: lette (santa)" in printed and "degraded=false" in outputs
+    assert "photos" not in published_figures(tmp_path)
+
+
+def test_sync_keeps_the_photos_already_published_when_one_cannot_be_read(monkeypatch, capsys, tmp_path):
+    online = prepare(picture((900, 600)))
+    bucket = stand_in_bucket({"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": b"not a photo"})
+    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    monkeypatch.setattr(cli, "previous_from_site", lambda site_url, **settings: sync.PreviousPage(photos={"santa": online}))
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
+    assert family["photos"] == {"santa": online.to_dict()}
+    assert "foto: foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP)): santa" in printed
+    assert "degraded=true" in outputs  # the page is published, then the run asks for attention
 
 
 def test_sync_keeps_the_costs_already_published_when_the_bucket_cannot_be_read(monkeypatch, capsys, tmp_path):
     online = CostSheet(year=2026, lines=(CostLine("IMU", {"santa": 145000, "vassena": 390050}, "stima"),))
 
-    def refused(url, key_id, secret):
+    def refused(url, key_id, secret, **limits):
         raise StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
 
     monkeypatch.setattr("casecal.r2.fetch", refused)
@@ -453,6 +494,10 @@ def test_demo_builds_an_openable_page(monkeypatch, capsys, tmp_path, variant):
     for sheet in owner["costs"]:
         assert len(sheet["lines"]) >= 10 and {"mare", "lago"} == set(sheet["lines"][0]["amounts"])
         assert any(None in line["amounts"].values() for line in sheet["lines"])  # a cost of one house only
+    # A picture of each house, drawn for the demo; also of a house whose portal could not be read.
+    assert set(family["photos"]) == {"mare", "lago"}
+    assert all(photo["type"] == "image/webp" and photo["data"] for photo in family["photos"].values())
+    assert family["photos"]["mare"] != family["photos"]["lago"]
     # Also for a house that could not be read: the family's notes do not depend on the portal.
     assert sorted(entry["prop"] for entry in family["entries"]) == ["lago", "mare", "mare"]
 

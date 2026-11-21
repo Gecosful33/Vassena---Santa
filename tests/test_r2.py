@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from casecal import r2
-from casecal.r2 import EMPTY_SHA256, MAX_BYTES, StorageError, authorization, fetch
+from casecal.r2 import EMPTY_SHA256, MAX_BYTES, NotFound, StorageError, authorization, fetch, sibling
 
 NOW = datetime(2026, 11, 21, 2, 17, 5, tzinfo=timezone.utc)
 URL = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/case-private/Spese case.xlsx"
@@ -197,3 +197,40 @@ def test_a_file_too_large_to_be_the_workbook_is_not_downloaded_whole():
     assert len(served) == MAX_BYTES // len(megabyte) + 1  # stopped as soon as the limit was passed
     exact = FakeSession(FakeResponse(chunks=(megabyte,) * (MAX_BYTES // len(megabyte))))
     assert len(fetch(URL, KEY_ID, SECRET, session=exact, now=NOW)) == MAX_BYTES
+
+
+def test_a_missing_file_is_told_apart_from_a_refusal():
+    # A house without a photo is not a failure: the caller has to know which of the two it is.
+    with pytest.raises(NotFound):
+        fetch(URL, KEY_ID, SECRET, session=FakeSession(FakeResponse(404)), now=NOW)
+    assert issubclass(NotFound, StorageError)
+    for status in (401, 403, 500):
+        with pytest.raises(StorageError) as caught:
+            fetch(URL, KEY_ID, SECRET, session=FakeSession(FakeResponse(status)), now=NOW)
+        assert not isinstance(caught.value, NotFound)
+
+
+def test_the_size_a_file_may_have_is_the_callers_to_say():
+    megabyte = b"x" * (1024 * 1024)
+    seven = FakeResponse(chunks=(megabyte,) * 7)
+    with pytest.raises(StorageError, match=r"file troppo grande \(oltre 5 MB\)"):
+        fetch(URL, KEY_ID, SECRET, session=FakeSession(seven), now=NOW)
+    assert len(fetch(URL, KEY_ID, SECRET, session=FakeSession(seven), now=NOW, max_bytes=8 * len(megabyte))) == 7 * len(megabyte)
+    with pytest.raises(StorageError, match=r"file troppo grande \(oltre 2 MB\)"):
+        fetch(URL, KEY_ID, SECRET, session=FakeSession(seven), now=NOW, max_bytes=2 * len(megabyte))
+
+
+def test_a_file_kept_beside_another_has_the_same_bucket_and_folder():
+    base = "https://acc.r2.cloudflarestorage.com"
+    assert sibling(f"{base}/case-private/Spese case.xlsx", "santa.jpg") == f"{base}/case-private/santa.jpg"
+    assert sibling(f"{base}/b/conti/2026/spese.xlsx", "vassena.jpg") == f"{base}/b/conti/2026/vassena.jpg"
+    assert sibling(f"{base}/b/Cartella con spazi/spese.xlsx", "santa.jpg") == f"{base}/b/Cartella%20con%20spazi/santa.jpg"
+    # The name is one file's, whatever it contains: it cannot step out of the folder.
+    assert sibling(f"{base}/b/conti/spese.xlsx", "../altro/x.jpg") == f"{base}/b/conti/..%2Faltro%2Fx.jpg"
+    assert sibling(f" https://ACC.eu.r2.cloudflarestorage.com/b/spese.xlsx ", "casa mia.jpg") == "https://acc.eu.r2.cloudflarestorage.com/b/casa%20mia.jpg"
+    # What it makes is an address the fetch accepts.
+    session = FakeSession()
+    fetch(sibling(URL, "santa.jpg"), KEY_ID, SECRET, session=session, now=NOW)
+    assert session.calls[0][0].endswith("/case-private/santa.jpg")
+    with pytest.raises(StorageError, match="COSTS_R2_URL non valido"):
+        sibling("https://example.com/b/spese.xlsx", "santa.jpg")

@@ -24,7 +24,8 @@ ogni notte (GitHub Actions, 02:17 UTC)
      → elenco prenotazioni → logout
   └─ controlli di coerenza (vedi sotto)
   └─ rilettura delle voci inserite dalla famiglia (registro cifrato, vedi sotto)
-  └─ lettura del foglio delle spese da un bucket privato (facoltativo: è il P&L)
+  └─ lettura del foglio delle spese e delle foto delle case da un bucket privato
+     (facoltativi: il P&L e le foto sulle schede)
   └─ cifratura → una sola pagina HTML → GitHub Pages
 
 durante il giorno (nel browser di chi apre la pagina)
@@ -186,10 +187,35 @@ Per aggiornare le spese basta ricaricare il file nel bucket con lo stesso nome: 
 pagina le prende alla lettura notturna successiva. Se una notte il file non si scarica
 o non si legge, la pagina tiene le spese già pubblicate e il job lo segnala.
 
+### 8. Le foto delle case (facoltativo)
+
+Una foto per casa, per riconoscerla a colpo d'occhio: compare sulla scheda della casa,
+al posto del quadratino colorato, e in testa alla sua vista. Le foto sono private come
+il foglio delle spese e non entrano nel repository: stanno nello stesso bucket del
+passo 7, accanto al foglio, e il job le legge con la stessa chiave. Non servono altri
+secret.
+
+1. Una foto per casa, orizzontale e con il soggetto al centro: la pagina la ritaglia
+   attorno al centro (una fascia larga sul telefono, un riquadro 3:2 su schermo
+   grande). Vanno bene JPEG, PNG e WebP fino a 20 MB; non il formato HEIC di iPhone.
+2. Caricarle nel bucket, nella stessa cartella del foglio, con il nome
+   `<id della casa>.jpg`, dove l'id è quello di `properties.toml`: `santa.jpg` e
+   `vassena.jpg`.
+3. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare
+   `foto: lette (santa, vassena)`.
+
+Il job non pubblica il file così com'è. Ne ricava un'immagine piccola (lato lungo di
+840 pixel, al più 64 KB) e senza i dati che la fotocamera scrive nel file (luogo, data,
+dispositivo), e la mette nella parte cifrata della pagina. Una casa senza file resta
+senza foto, e non è un errore; per togliere una foto basta cancellare il file dal
+bucket. Se una notte una foto non si scarica o non è un'immagine, la pagina tiene
+quella già pubblicata e il job lo segnala.
+
 ## Cosa mostra la pagina
 
-Con la password si vede tutto. In alto c'è una scheda per casa: la pagina mostra una
-casa alla volta e ogni dispositivo ricorda l'ultima scelta.
+Con la password si vede tutto. In alto c'è una scheda per casa, con la sua foto se è
+stata caricata (passo 8): la pagina mostra una casa alla volta e ogni dispositivo
+ricorda l'ultima scelta.
 
 | Sezione | Contenuto, per la casa scelta |
 |---|---|
@@ -365,6 +391,9 @@ prenotazioni a importo zero.
 - **Segnalazione al proprietario.** La issue «Date da far bloccare al gestore» è
   pubblica e dice solo che c'è qualcosa da guardare. Il job la scrive con il token del
   workflow, a cui per questo è concesso il permesso `issues: write`.
+- **Foto delle case.** Stanno nello stesso bucket privato. Il job ne pubblica una copia
+  ridotta e senza metadati dentro la parte cifrata della pagina: senza password non si
+  vedono, chi ha la password le vede.
 - **Foglio delle spese.** Il file sta in un bucket privato, fuori dal repository. Il job
   lo scarica con una chiave che può soltanto leggere quel bucket; nella pagina arrivano,
   cifrati insieme ai conti, solo i nomi delle spese, gli importi e le note. Il browser
@@ -464,14 +493,17 @@ somma delle voci.
 | `spese non lette (foglio 2026: non trovo …)` | manca la riga `Voce`, la riga `SPESE` o quella che inizia con `Totale` | ripristinare la struttura del passo 7 |
 | `foglio 2026: il totale delle spese scritto nel foglio non è la somma delle voci` | la formula del totale non comprende tutte le righe | correggere la formula; la pagina usa comunque la somma delle voci |
 | `foglio 2026: una colonna non corrisponde a nessuna casa` / `manca la colonna della casa …` | intestazione diversa dal nome della casa | rinominare la colonna |
+| `foto non lette (il file non è un'immagine leggibile …): santa` | caricato un HEIC, o un file che non è una foto | esportare in JPEG e ricaricare come `santa.jpg` |
+| `foto non lette (file troppo grande …)` / `(immagine troppo grande …)` | file oltre 20 MB, o oltre 60 megapixel | ridurre la foto e ricaricarla |
+| `foto non lette (chiave rifiutata, …)` / `(Cloudflare R2 non raggiungibile …)` | la stessa causa di `spese non lette` | vedi le righe sopra |
 
 Quando il registro non si legge, la pagina viene pubblicata lo stesso con le voci già
 note e il job risulta fallito, così arriva la mail. Finché il token non funziona la
 famiglia non può inserire né modificare periodi.
 
-Anche un problema con il foglio delle spese fa risultare il job fallito, dopo aver
-pubblicato la pagina: il calendario è aggiornato, il P&L mostra le spese dell'ultima
-lettura riuscita.
+Anche un problema con il foglio delle spese o con una foto fa risultare il job fallito,
+dopo aver pubblicato la pagina: il calendario è aggiornato, il P&L mostra le spese
+dell'ultima lettura riuscita e le case tengono la foto che avevano.
 
 **Schedule disattivato.** GitHub spegne i workflow schedulati dei repository pubblici
 dopo 60 giorni senza attività. Il job si riabilita da solo a ogni esecuzione; se
@@ -523,6 +555,7 @@ le variabili d'ambiente del passo 1, e quelle del passo 7 per il P&L).
 | `casecal/familylog.py` | registro di famiglia su GitHub: lettura notturna e impostazioni per la pagina |
 | `casecal/alerts.py` | segnalazione al proprietario delle date da far bloccare |
 | `casecal/costs.py` | foglio Excel delle spese → voci per casa, con i suoi controlli |
+| `casecal/photos.py` | foto delle case: da un file qualsiasi a un'immagine piccola e senza metadati |
 | `casecal/r2.py` | lettura del file dal bucket privato: una richiesta firmata, in sola lettura |
 | `casecal/sync.py` | orchestrazione notturna e recupero dell'ultimo stato valido |
 | `casecal/site.py` | assemblaggio della pagina unica e della sua CSP |
@@ -530,10 +563,12 @@ le variabili d'ambiente del passo 1, e quelle del passo 7 per il P&L).
 | `tests/portal_html.py` | pagine sintetiche con la stessa struttura del portale |
 | `tests/github_fake.py` | controfigura dell'API di GitHub usata dal registro e dalla segnalazione |
 | `tests/workbooks.py` | fogli di spese inventati, nel formato che il job si aspetta |
+| `tests/pictures.py` | immagini inventate, disegnate sul momento dai test |
 | `tests/fixtures/entry_status.json` | casi su cui job notturno e pagina devono dare lo stesso stato a un periodo |
 
 Questo repository è pubblico: nei test non devono mai entrare pagine scaricate dai
-portali, nomi, indirizzi o importi veri, né il foglio delle spese o le sue cifre.
+portali, nomi, indirizzi o importi veri, né il foglio delle spese o le sue cifre, né
+le foto delle case.
 
 ### Aggiungere una casa
 

@@ -223,9 +223,12 @@
     state.props = opened.family.properties.map(L.prepare);
     // The mark stands in for the photo a booking app would show on each bar.
     var marks = L.badges(state.props.map(function (prop) { return prop.label; }));
+    // The photo itself, where the house has one, is on its tab and at the top of its view.
+    var photos = L.photoUrls(opened.family.photos);
     state.props.forEach(function (prop, index) {
       prop.index = index;
       prop.badge = marks[index];
+      prop.photo = photos[prop.id] || null;
     });
     state.today = L.todayInZone(opened.family.tz, Date.now());
     document.title = opened.family.title || genericTitle;
@@ -361,8 +364,10 @@
         checked: option.id === current
       });
       input.addEventListener("change", function () { onPick(option.id, name + ":" + option.id); });
-      var face = el("span", option.index === undefined ? null : { class: "p" + option.index },
-        option.index === undefined ? null : el("i", { class: "swatch" }), option.label);
+      // A house is told by its photo where it has one (ringed in its colour), by its colour alone otherwise.
+      var mark = option.index === undefined ? null
+        : option.photo ? el("img", { class: "thumb", src: option.photo, alt: "", decoding: "sync" }) : el("i", { class: "swatch" });
+      var face = el("span", option.index === undefined ? null : { class: "p" + option.index }, mark, option.label);
       return el("label", null, input, face);
     }));
   }
@@ -909,7 +914,7 @@
     var withPnl = pnlSheets().length > 0;
     if (state.props.length < 2 && !withPnl) return null;
     var options = state.props.map(function (prop) {
-      return { id: prop.id, label: prop.label, index: prop.index };
+      return { id: prop.id, label: prop.label, index: prop.index, photo: prop.photo };
     });
     if (withPnl) options.push({ id: PNL, label: "P&L" });
     return el("div", null, segmented("house", withPnl ? "Vista" : "Casa", options, state.pnl ? PNL : state.house, function (id, key) {
@@ -929,18 +934,26 @@
 
   /** One house: who is there and who is coming next, and nothing else. */
   function houseCard(prop) {
-    var card = el("article", { class: "card house p" + prop.index },
+    // Everything about the house goes in `body`; beside it (above it on a phone) its photo,
+    // so that which house this is can be seen before anything is read.
+    var body = el("div", { class: "house-body" },
       el("div", { class: "house-head" }, el("i", { class: "swatch" }), el("h3", { text: prop.label }),
         prop.unit ? el("span", { class: "unit", text: prop.unit }) : null));
+    var card = el("article", { class: "card house p" + prop.index + (prop.photo ? " with-photo" : "") },
+      // Decoded before it is painted: the page is redrawn whole at every change, and a
+      // picture that came a frame late would blink each time.
+      prop.photo ? el("div", { class: "house-photo" },
+        el("img", { src: prop.photo, alt: "Foto di " + prop.label, decoding: "sync" })) : null,
+      body);
     if (prop.missing) {
-      append(card, el("p", { class: "now" }, icon("unknown"),
+      append(body, el("p", { class: "now" }, icon("unknown"),
         el("span", null, el("strong", { text: "Dati non disponibili" }), " · il portale del gestore non è stato letto")));
       return card;
     }
-    append(card, el("h4", { text: "Prossimi ospiti" }));
+    append(body, el("h4", { text: "Prossimi ospiti" }));
     var guests = L.upcomingGuests(prop, state.today);
     if (!guests.length) {
-      append(card, el("p", { class: "empty", text: "Nessun ospite in arrivo fino a " + shortLabel(prop.to - 1) + "." }));
+      append(body, el("p", { class: "empty", text: "Nessun ospite in arrivo fino a " + shortLabel(prop.to - 1) + "." }));
       return card;
     }
     var expanded = !!state.allGuests[prop.id];
@@ -951,7 +964,7 @@
     var next = guests.filter(function (guest) { return !guest.current; })[0];
     // In a box that scrolls on its own: whatever the screen and the device's font, a
     // table too wide for the card must not make the whole page scroll sideways.
-    append(card, el("div", { class: "scroll" }, el("table", { class: "rows" },
+    append(body, el("div", { class: "scroll" }, el("table", { class: "rows" },
       el("thead", null, el("tr", null,
         el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
         el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
@@ -971,7 +984,7 @@
       })))));
     if (guests.length > GUESTS_SHOWN) {
       var key = "guests:" + prop.id;
-      append(card, el("button", {
+      append(body, el("button", {
         class: "btn quiet more", type: "button", "data-key": key, "aria-expanded": String(expanded),
         text: expanded ? "Mostra meno" : "Mostra tutti i " + guests.length + " soggiorni",
         onclick: function () { state.allGuests[prop.id] = !expanded; render(key); }

@@ -52,6 +52,23 @@ var CaseCalLogic = (function () {
     return (h < 10 ? "0" : "") + h + ":" + (m < 10 ? "0" : "") + m;
   }
 
+  /**
+   * The houses' pictures as addresses an <img> can show, by house id. Only what the
+   * nightly job makes is let through: a WebP, written in base64.
+   */
+  function photoUrls(photos) {
+    var urls = {};
+    if (!photos || typeof photos !== "object") return urls;
+    Object.keys(photos).forEach(function (id) {
+      var photo = photos[id];
+      if (photo && photo.type === "image/webp" && typeof photo.data === "string" &&
+          /^[A-Za-z0-9+/]+={0,2}$/.test(photo.data)) {
+        urls[id] = "data:image/webp;base64," + photo.data;
+      }
+    });
+    return urls;
+  }
+
   /** Turn one house of the family payload into the shape the views work with. */
   function prepare(raw) {
     var checkIn = clockMinutes(raw.check_in, 15 * 60), checkOut = clockMinutes(raw.check_out, 11 * 60);
@@ -728,7 +745,7 @@ var CaseCalLogic = (function () {
     DAY_MS: DAY_MS,
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,
-    prepare: prepare, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
+    prepare: prepare, photoUrls: photoUrls, badges: badges, covered: covered, dayInfo: dayInfo, nightStatus: nightStatus,
     upcomingGuests: upcomingGuests, monthsBetween: monthsBetween, monthWeeks: monthWeeks,
     weekSegments: weekSegments, clipToWeek: clipToWeek, cellPosition: cellPosition, clockMinutes: clockMinutes,
     freshness: freshness, familyRuns: familyRuns, shortName: shortName,
