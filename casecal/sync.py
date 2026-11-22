@@ -250,8 +250,12 @@ def costs_state(
     secret: str | None,
     load_previous: PreviousLoader,
     fetch: Callable[[str, str, str], bytes] | None = None,
+    listing: Callable[[str, str, str], list[str]] | None = None,
 ) -> CostsState:
     """The cost sheets of the owner's workbook, fetched from its private bucket.
+
+    ``url`` names the workbook, or just the bucket (or a folder of it) it is
+    kept in: then the workbook is the one Excel file found there.
 
     Without the three settings there is no profit and loss, and nothing to
     report. With them, a workbook that cannot be fetched or trusted leaves the
@@ -271,7 +275,20 @@ def costs_state(
     if not all(given):
         return kept("servono tutti e tre i secret COSTS_R2_URL, COSTS_R2_ACCESS_KEY_ID e COSTS_R2_SECRET_ACCESS_KEY")
     try:
-        data = (fetch or r2.fetch)(url, key_id, secret)
+        address = url
+        if not r2.place(url).names_a_file:
+            # Excel leaves a "~$..." file beside a workbook that is open: never the workbook itself.
+            found = [
+                name
+                for name in (listing or r2.names)(url, key_id, secret)
+                if name.lower().endswith(".xlsx") and not name.startswith("~$")
+            ]
+            if not found:
+                return kept("nel bucket non c'è nessun file Excel (.xlsx)")
+            if len(found) > 1:
+                return kept("nel bucket ci sono più file Excel (.xlsx): indica quale, aggiungendo /<file> a COSTS_R2_URL")
+            address = r2.sibling(url, found[0])
+        data = (fetch or r2.fetch)(address, key_id, secret)
         sheets, warnings = parse_workbook(data, [(prop.id, prop.label) for prop in config.properties])
     except (r2.StorageError, CostsError) as exc:
         return kept(str(exc))  # written to be public: no address, no key, nothing of the content
@@ -301,13 +318,14 @@ def photos_state(
 ) -> PhotosState:
     """A photo of each house, from the bucket that holds the workbook of costs.
 
-    The photo of a house is the file named after the house's id (``santa.jpg``,
-    or one of the other endings a photo is saved with) kept beside the
-    workbook: ``url`` is the workbook's address, and tells where to look. A
-    house without such a file simply has no photo; that is no fault, and is
-    only noted. A file that cannot be fetched, or is not a photo, keeps the
-    picture already published and flags the run; like the costs, nothing about
-    the photos can stop the calendar.
+    The photo of a house is the file the configuration names for it, or the
+    one named after the house's id (``santa.jpg``, or one of the other endings
+    a photo is saved with), kept beside the workbook: ``url`` is the address
+    of the workbook or of its bucket, and tells where to look. A house without
+    such a file simply has no photo; that is no fault, and is only noted. A
+    file that cannot be fetched, or is not a photo, keeps the picture already
+    published and flags the run; like the costs, nothing about the photos can
+    stop the calendar.
     """
     given = [bool(url), bool(key_id), bool(secret)]
     if not any(given):
@@ -316,11 +334,13 @@ def photos_state(
         # Said once already, where the costs are read: here it only means "leave things as they are".
         return PhotosState(dict(load_previous().photos), [])
 
-    def stored(house: str) -> bytes | None:
+    def stored(prop: PropertyConfig) -> bytes | None:
         """The file kept for this house, under the first of its possible names; None if there is none."""
-        for ending in FILE_ENDINGS:
+        # The name the configuration gives it, if any, then the house's id with a photo's usual endings.
+        possible = ([prop.photo] if prop.photo else []) + [prop.id + ending for ending in FILE_ENDINGS]
+        for name in possible:
             try:
-                return (fetch or r2.fetch)(r2.sibling(url, house + ending), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+                return (fetch or r2.fetch)(r2.sibling(url, name), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
             except r2.NotFound:
                 continue
         return None
@@ -331,11 +351,11 @@ def photos_state(
     failed: dict[str, list[str]] = {}  # reason -> houses
     for prop in config.properties:
         try:
-            raw = stored(prop.id)
+            raw = stored(prop)
             if raw is None:
                 absent.append(prop.id)  # no photo of this house: nothing to show
                 continue
-            photos[prop.id] = prepare(raw)
+            photos[prop.id] = prepare(raw, prop.photo_focus)
             fresh.append(prop.id)
         except (r2.StorageError, PhotoError) as exc:
             failed.setdefault(str(exc), []).append(prop.id)  # written to be public

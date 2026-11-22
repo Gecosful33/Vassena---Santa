@@ -172,14 +172,16 @@ Excel, o da un programma che salvi anche il risultato delle formule.
 
    | Nome | Valore |
    |---|---|
-   | `COSTS_R2_URL` | `https://<account>.r2.cloudflarestorage.com/<bucket>/<file>` |
+   | `COSTS_R2_URL` | l'indirizzo «S3 API» del bucket: `https://<account>.r2.cloudflarestorage.com/<bucket>` |
    | `COSTS_R2_ACCESS_KEY_ID` | l'Access Key ID |
    | `COSTS_R2_SECRET_ACCESS_KEY` | la Secret Access Key |
 
-   `<account>` è l'Account ID che Cloudflare mostra in `Account Details`; lo stesso
-   indirizzo, fino al nome del bucket, è l'«S3 API» nelle impostazioni del bucket. Il
-   nome del file va scritto com'è, spazi compresi. Per un bucket creato con
-   giurisdizione europea l'indirizzo è `https://<account>.eu.r2.cloudflarestorage.com/…`.
+   L'indirizzo è quello che Cloudflare mostra, pronto da copiare, nella scheda
+   `Settings` del bucket alla riga `S3 API`: contiene già l'account, il nome del bucket
+   e, per un bucket con giurisdizione europea, il `.eu.` nell'host. Va incollato così
+   com'è. Il job trova da solo il foglio: è l'unico file `.xlsx` del bucket. Solo se
+   nel bucket ci sono più file `.xlsx` bisogna dire quale, aggiungendo all'indirizzo
+   `/` e il nome del file scritto com'è, spazi compresi.
 8. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare `spese: lette` e
    nella pagina, dopo le schede delle case, il tasto «P&L».
 
@@ -195,16 +197,22 @@ il foglio delle spese e non entrano nel repository: stanno nello stesso bucket d
 passo 7, accanto al foglio, e il job le legge con la stessa chiave. Non servono altri
 secret.
 
-1. Una foto per casa, orizzontale e con il soggetto al centro: la pagina la ritaglia
-   attorno al centro (una fascia larga sul telefono, un riquadro 3:2 su schermo
-   grande). Vanno bene JPEG, PNG e WebP fino a 20 MB; non il formato HEIC di iPhone.
-2. Caricarle nel bucket, nella stessa cartella del foglio, con il nome
-   `<id della casa>.jpg`, dove l'id è quello di `properties.toml`: `santa.jpg` e
-   `vassena.jpg`, in minuscolo. Il job le cerca anche con le estensioni `.jpeg`, `.png`
-   e `.webp`.
+1. Una foto per casa. La pagina la mostra in orizzontale (una fascia larga sul
+   telefono, un riquadro 3:2 su schermo grande), ritagliata attorno al centro. Vanno
+   bene JPEG, PNG e WebP fino a 20 MB; non il formato HEIC di iPhone.
+2. Caricarle nel bucket, accanto al foglio, con il nome `<id della casa>.jpg`, dove
+   l'id è quello di `properties.toml`: `santa.jpg` e `vassena.jpg`, in minuscolo. Il
+   job le cerca anche con le estensioni `.jpeg`, `.png` e `.webp`. Una foto caricata
+   con un altro nome si indica in `properties.toml`, nel blocco della casa, con
+   `photo = "<nome del file>"`.
 3. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare
    `foto: lette (santa, vassena)`; per una casa di cui non trova il file scrive
    `foto: nessun file per …`, senza che sia un errore.
+
+Una foto verticale, o comunque più alta del riquadro, viene tagliata in orizzontale
+dal job. Di norma attorno alla metà; se il soggetto è più in alto o più in basso lo
+dice `photo_focus` nel blocco della casa, in percentuale dall'alto (`photo_focus = 26`:
+il soggetto è a un quarto dell'altezza).
 
 Il job non pubblica il file così com'è. Ne ricava un'immagine piccola (lato lungo di
 840 pixel, al più 64 KB) e senza i dati che la fotocamera scrive nel file (luogo, data,
@@ -488,7 +496,10 @@ somma delle voci.
 | `avviso al proprietario non aggiornato (…)` | GitHub ha rifiutato la scrittura della segnalazione | controllare che il workflow abbia ancora `issues: write`; l'elenco nella pagina resta corretto |
 | `spese non lette (chiave rifiutata, …)` | chiave di R2 sbagliata, scaduta o non valida per quel bucket | ripetere i punti 4–7 del passo 7 |
 | `spese non lette (file non trovato: …)` | bucket o file con un nome diverso da quello in `COSTS_R2_URL`, anche solo per una maiuscola; oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'indirizzo | correggere il secret, o ricaricare il file con il nome atteso |
-| `spese non lette (COSTS_R2_URL non valido: …)` | l'indirizzo non è quello completo del file; il messaggio dice quale parte manca o non va (di solito il nome del bucket e del file dopo l'endpoint, oppure si è incollato l'indirizzo pubblico `r2.dev` o quello del pannello) | riscrivere il secret nella forma indicata al passo 7; nessuna richiesta è partita, quindi le chiavi non sono ancora state provate |
+| `spese non lette (COSTS_R2_URL non valido: …)` | l'indirizzo non è quello del bucket; il messaggio dice quale parte manca o non va (di solito il nome del bucket dopo l'endpoint, oppure si è incollato l'indirizzo pubblico `r2.dev` o quello del pannello) | incollare nel secret l'indirizzo «S3 API» del bucket, come al passo 7; nessuna richiesta è partita, quindi le chiavi non sono ancora state provate |
+| `spese non lette (bucket non trovato: …)` | nome del bucket sbagliato, oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'host | ricopiare l'indirizzo «S3 API» dalle impostazioni del bucket |
+| `spese non lette (nel bucket non c'è nessun file Excel (.xlsx))` | il foglio non è stato caricato, o è un `.xls` | caricare il foglio in formato `.xlsx` |
+| `spese non lette (nel bucket ci sono più file Excel (.xlsx): …)` | il job non sa quale sia il foglio delle spese | aggiungere a `COSTS_R2_URL` `/` e il nome del file, oppure togliere dal bucket quelli in più |
 | `spese non lette (servono tutti e tre i secret …)` | manca uno dei tre secret | completare il passo 7 |
 | `spese non lette (il file non è una cartella di lavoro Excel …)` | caricato un `.xls`, un `.csv` o un file danneggiato | salvare come `.xlsx` e ricaricare |
 | `spese non lette (foglio 2026, riga 14: …)` | in una cella di importo c'è del testo, o una formula senza risultato | correggere quella riga (`n.a.` è ammesso) e ricaricare |
@@ -558,7 +569,7 @@ le variabili d'ambiente del passo 1, e quelle del passo 7 per il P&L).
 | `casecal/alerts.py` | segnalazione al proprietario delle date da far bloccare |
 | `casecal/costs.py` | foglio Excel delle spese → voci per casa, con i suoi controlli |
 | `casecal/photos.py` | foto delle case: da un file qualsiasi a un'immagine piccola e senza metadati |
-| `casecal/r2.py` | lettura del file dal bucket privato: una richiesta firmata, in sola lettura |
+| `casecal/r2.py` | lettura dal bucket privato (un file, o l'elenco dei file) con richieste firmate, in sola lettura |
 | `casecal/sync.py` | orchestrazione notturna e recupero dell'ultimo stato valido |
 | `casecal/site.py` | assemblaggio della pagina unica e della sua CSP |
 | `casecal/web/` | la pagina: decifratura, logica del calendario, registro (`store.js`), interfaccia |

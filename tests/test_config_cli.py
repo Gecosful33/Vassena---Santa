@@ -1,6 +1,7 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -112,6 +113,32 @@ def test_house_hours_can_be_set_for_all_houses_and_overridden_for_one(tmp_path):
 def test_impossible_house_hours_are_refused(tmp_path, text, message):
     with pytest.raises(ConfigError, match=message):
         load_config(write_config(tmp_path, text))
+
+
+def test_a_house_may_have_a_photo_under_a_name_of_its_own(tmp_path):
+    plain = load_config(write_config(tmp_path, '[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n'))
+    assert (plain.properties[0].photo, plain.properties[0].photo_focus) == (None, 50)
+    named = load_config(write_config(
+        tmp_path, '[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\nphoto = " IMG 0001.jpeg "\nphoto_focus = 26\n'))
+    assert (named.properties[0].photo, named.properties[0].photo_focus) == ("IMG 0001.jpeg", 26)
+
+
+@pytest.mark.parametrize(
+    "line, message",
+    [
+        ('photo = ""', "photo deve essere il nome di un file del bucket"),
+        ('photo = "cartella/foto.jpg"', "photo deve essere il nome di un file del bucket"),
+        ("photo = 7", "photo deve essere il nome di un file del bucket"),
+        ("photo_focus = 101", "photo_focus deve essere un numero intero tra 0"),
+        ("photo_focus = -1", "photo_focus deve essere un numero intero tra 0"),
+        ("photo_focus = 26.5", "photo_focus deve essere un numero intero tra 0"),
+        ('photo_focus = "alto"', "photo_focus deve essere un numero intero tra 0"),
+        ("photo_focus = true", "photo_focus deve essere un numero intero tra 0"),
+    ],
+)
+def test_an_impossible_photo_setting_is_refused(tmp_path, line, message):
+    with pytest.raises(ConfigError, match=message):
+        load_config(write_config(tmp_path, f'[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n{line}\n'))
 
 
 def test_missing_file_is_a_configuration_error(tmp_path):
@@ -406,15 +433,33 @@ def test_sync_publishes_the_photos_kept_beside_the_workbook(monkeypatch, capsys,
     monkeypatch.setattr("casecal.r2.fetch", bucket)
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     folder = BUCKET_ENV["COSTS_R2_URL"].rsplit("/", 1)[0]
+    # Each house's photo is looked for under the name the configuration gives it, if any,
+    # then under the house's own name with a photo's usual endings; the first found is it.
+    houses = {prop.id: prop for prop in load_config(ROOT / "properties.toml").properties}
+    named = {house: ([quote(prop.photo)] if prop.photo else []) for house, prop in houses.items()}
     assert [(url, limits) for url, _, _, limits in bucket.asked[1:]] == [
         (f"{folder}/{name}", {"max_bytes": MAX_SOURCE_BYTES})
-        for name in ("santa.jpg", "vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp")
+        for name in named["santa"] + ["santa.jpg"] + named["vassena"] + ["vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp"]
     ]
     # The house with a file has its picture, made small; the other one has none.
-    assert family["photos"] == {"santa": prepare(source).to_dict()}
+    assert family["photos"] == {"santa": prepare(source, houses["santa"].photo_focus).to_dict()}
     assert "foto: lette (santa)" in printed and "foto: nessun file per vassena" in printed
     assert "degraded=false" in outputs
     assert "photos" not in published_figures(tmp_path)
+
+
+def test_sync_finds_the_workbook_in_a_bucket_given_by_its_address_alone(monkeypatch, capsys, tmp_path):
+    address = "https://acc0123.r2.cloudflarestorage.com/case-private"  # as Cloudflare shows it for the bucket
+    bucket = stand_in_bucket({"Analisi%20Entrate-Spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")})})
+    listed = []
+    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    monkeypatch.setattr("casecal.r2.names", lambda *settings: listed.append(settings) or ["IMG_0001.jpeg", "Analisi Entrate-Spese.xlsx"])
+    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **{**BUCKET_ENV, "COSTS_R2_URL": address})
+    assert listed == [(address, BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])]
+    assert bucket.asked[0][0] == f"{address}/Analisi%20Entrate-Spese.xlsx"
+    assert "spese: lette" in printed and "degraded=false" in outputs
+    assert [sheet["year"] for sheet in published_figures(tmp_path)["costs"]] == [2026]
+    assert "Analisi" not in printed  # the name of the file is the owner's business
 
 
 def test_sync_keeps_the_photos_already_published_when_one_cannot_be_read(monkeypatch, capsys, tmp_path):

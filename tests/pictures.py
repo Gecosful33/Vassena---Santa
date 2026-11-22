@@ -12,3 +12,14 @@ def picture(size: tuple[int, int] = (1200, 800), kind: str = "JPEG") -> bytes:
     buffer = BytesIO()
     image.save(buffer, kind)
     return buffer.getvalue()
+
+
+def upright_picture(size: tuple[int, int] = (1200, 1600)) -> bytes:
+    """An upright file in three bands, top to bottom: which part a cut keeps can be told."""
+    image = Image.new("RGB", size, (200, 40, 40))
+    third = size[1] // 3
+    image.paste((40, 160, 60), (0, third, size[0], 2 * third))
+    image.paste((40, 60, 200), (0, 2 * third, size[0], size[1]))
+    buffer = BytesIO()
+    image.save(buffer, "JPEG")
+    return buffer.getvalue()

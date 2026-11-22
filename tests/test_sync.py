@@ -1,6 +1,7 @@
 import base64
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from urllib.parse import unquote
 
 import pytest
 
@@ -24,7 +25,7 @@ from casecal.sync import (
     publish,
     target_years,
 )
-from pictures import picture
+from pictures import picture, upright_picture
 from workbooks import workbook, year_rows
 
 NOW = datetime(2026, 8, 15, 2, 17, tzinfo=timezone.utc)
@@ -346,6 +347,54 @@ def test_a_workbook_that_cannot_be_fetched_or_read_keeps_the_costs_already_publi
     assert state.sheets == [] and len(state.warnings) == 1
 
 
+def test_the_address_of_the_bucket_alone_is_enough_to_find_the_workbook():
+    # What Cloudflare shows, ready to be copied, among the settings of a bucket: no file name to get wrong.
+    folder = "https://acc.r2.cloudflarestorage.com/case-private"
+    book = workbook({"2026": year_rows("Vassena", "Santa")})
+    asked = []
+
+    def fetch(url, key_id, secret):
+        asked.append(url)
+        return book
+
+    def holding(*files):
+        return lambda url, key_id, secret: list(files)
+
+    for address in (folder, folder + "/"):
+        asked.clear()
+        state = costs_state(CONFIG, **{**BUCKET, "url": address}, load_previous=no_previous, fetch=fetch,
+                            listing=holding("IMG_0001.jpeg", "Analisi Entrate-Spese.XLSX", "~$Analisi Entrate-Spese.XLSX", "appunti.txt"))
+        assert state.fresh and state.sheets[0].total("santa") == 273000
+        assert asked == [f"{folder}/Analisi%20Entrate-Spese.XLSX"]  # the one Excel file there, whatever it is called
+
+    # Nothing to choose, or too much: the costs already published stay, and the reason names no file.
+    for files, reason in (
+        (("IMG_0001.jpeg", "appunti.txt"), "nel bucket non c'è nessun file Excel (.xlsx)"),
+        ((), "nel bucket non c'è nessun file Excel (.xlsx)"),
+        (("spese 2026.xlsx", "spese vecchie.xlsx"),
+         "nel bucket ci sono più file Excel (.xlsx): indica quale, aggiungendo /<file> a COSTS_R2_URL"),
+    ):
+        state = costs_state(CONFIG, **{**BUCKET, "url": folder}, load_previous=published_with_costs,
+                            fetch=never_fetched, listing=holding(*files))
+        assert state.sheets == [COSTS] and not state.fresh
+        assert state.warnings == [f"spese non lette ({reason}): restano quelle già pubblicate"]
+
+    # The bucket cannot be listed: said as it is.
+    def refused(url, key_id, secret):
+        raise r2.StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
+
+    state = costs_state(CONFIG, **{**BUCKET, "url": folder}, load_previous=published_with_costs, fetch=never_fetched, listing=refused)
+    assert state.sheets == [COSTS] and "chiave rifiutata" in state.warnings[0]
+
+    # An address that names the workbook is fetched as before, without looking at what else is there.
+    def never_listed(url, key_id, secret):
+        raise AssertionError("the bucket must not be listed when the address names the file")
+
+    asked.clear()
+    state = costs_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch, listing=never_listed)
+    assert state.fresh and asked == [BUCKET["url"]]
+
+
 def test_the_bucket_is_read_through_the_signed_fetch_unless_told_otherwise(monkeypatch):
     asked = []
     monkeypatch.setattr(r2, "fetch", lambda *settings: asked.append(settings) or workbook({"2026": year_rows("Vassena", "Santa")}))
@@ -383,7 +432,7 @@ def bucket(files):
 
     def fetch(url, key_id, secret, *, max_bytes):
         asked.append((url, key_id, secret, max_bytes))
-        held = files.get(url.rsplit("/", 1)[1], r2.NotFound("file non trovato"))
+        held = files.get(unquote(url.rsplit("/", 1)[1]), r2.NotFound("file non trovato"))
         if isinstance(held, Exception):
             raise held
         return held
@@ -460,6 +509,30 @@ def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published(
     # With nothing published yet there is no picture to keep.
     state = photos_state(CONFIG, **BUCKET, load_previous=PreviousPage, fetch=bucket({"santa.jpg": refused}))
     assert state.photos == {} and len(state.warnings) == 1
+
+
+def test_a_house_may_name_its_photo_and_say_where_its_subject_is():
+    # The owner uploaded the photos as the phone called them, one of them upright with the house near its top.
+    named = Config(
+        title="Calendario case",
+        site_id="test/site",
+        properties=(
+            PropertyConfig(id="santa", label="Santa", env="SANTA", photo="IMG_0001.jpeg"),
+            PropertyConfig(id="vassena", label="Vassena", env="VASSENA", photo="da whatsapp.jpeg", photo_focus=20),
+        ),
+    )
+    upright = upright_picture()
+    fetch = bucket({"IMG_0001.jpeg": picture(), "da whatsapp.jpeg": upright, "santa.jpg": picture((300, 200))})
+    state = photos_state(named, **{**BUCKET, "url": FOLDER}, load_previous=no_previous, fetch=fetch)  # the bucket's own address
+    assert [url.rsplit("/", 1)[1] for url, *_ in fetch.asked] == ["IMG_0001.jpeg", "da%20whatsapp.jpeg"]
+    assert state.photos == {"santa": prepare(picture()), "vassena": prepare(upright, 20)}
+    assert prepare(upright, 20) != prepare(upright)  # cut around the point the house says
+    assert state.fresh == ["santa", "vassena"] and state.warnings == []
+    # A named file that is no longer there falls back to the house's own name.
+    fetch = bucket({"santa.jpg": picture((300, 200))})
+    state = photos_state(named, **BUCKET, load_previous=no_previous, fetch=fetch)
+    assert [url.rsplit("/", 1)[1] for url, *_ in fetch.asked][:2] == ["IMG_0001.jpeg", "santa.jpg"]
+    assert state.photos == {"santa": prepare(picture((300, 200)))} and state.absent == ["vassena"]
 
 
 @pytest.mark.parametrize("missing", ["url", "key_id", "secret"])

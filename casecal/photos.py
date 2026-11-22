@@ -23,6 +23,7 @@ from PIL import Image, ImageCms, ImageOps
 MAX_SOURCE_BYTES = 20 * 1024 * 1024  # a phone's photo as it comes out of the phone
 MAX_SOURCE_PIXELS = 60_000_000
 LONGEST_SIDE = 840  # pixels: enough for a banner across a phone held upright
+SHAPE = (3, 2)  # width to height: the tallest shape the page shows a photo in
 BUDGET_BYTES = 64 * 1024  # every byte is downloaded with the page, at every visit
 MIME = "image/webp"
 # What a file may be to be read at all: the formats a phone or a computer saves a photo in.
@@ -93,10 +94,26 @@ def _to_srgb(image: Image.Image) -> Image.Image:
         return image
 
 
-def prepare(raw: bytes) -> Photo:
+def _framed(image: Image.Image, focus: int) -> Image.Image:
+    """A picture taller than the page shows it (an upright photo, most of all) cut to the band around ``focus``.
+
+    ``focus`` says how far down the picture its subject is, in percent from the
+    top. The page then crops around the middle of what is left.
+    """
+    width, height = image.size
+    band = round(width * SHAPE[1] / SHAPE[0])
+    if band >= height:
+        return image
+    top = max(0, min(height - band, round(height * focus / 100 - band / 2)))
+    return image.crop((0, top, width, top + band))
+
+
+def prepare(raw: bytes, focus: int = 50) -> Photo:
     """The picture the page shows, made from a photo as its owner saved it.
 
-    Raises ``PhotoError`` for a file that is not a photo or is beyond reason.
+    ``focus`` is where to cut around, for a photo taller than the page shows
+    (see ``_framed``). Raises ``PhotoError`` for a file that is not a photo or
+    is beyond reason.
     """
     if len(raw) > MAX_SOURCE_BYTES:
         raise PhotoError(f"file troppo grande (oltre {MAX_SOURCE_BYTES // (1024 * 1024)} MB)")
@@ -122,6 +139,7 @@ def prepare(raw: bytes) -> Photo:
         except Exception:  # noqa: BLE001 - a file cut short, or one the decoder gives up on
             raise PhotoError(unreadable) from None
 
+    image = _framed(image, focus)
     image.thumbnail((LONGEST_SIDE, LONGEST_SIDE), Image.LANCZOS)
     while True:
         for quality in _QUALITIES:

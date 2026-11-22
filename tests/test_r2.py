@@ -6,7 +6,7 @@ import pytest
 import requests
 
 from casecal import r2
-from casecal.r2 import EMPTY_SHA256, MAX_BYTES, NotFound, StorageError, authorization, fetch, sibling
+from casecal.r2 import EMPTY_SHA256, MAX_BYTES, NotFound, StorageError, authorization, canonical_query, fetch, names, place, sibling
 
 NOW = datetime(2026, 11, 21, 2, 17, 5, tzinfo=timezone.utc)
 URL = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/case-private/Spese case.xlsx"
@@ -32,6 +32,27 @@ def test_the_signature_is_the_one_amazon_publishes_for_its_worked_example():
         "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20130524/us-east-1/s3/aws4_request, "
         "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date, "
         "Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"
+    )
+
+
+def test_the_signature_of_a_listing_is_the_one_amazon_publishes_too():
+    # "Example: GET Bucket (List Objects)" in the same reference: GET /?max-keys=2&prefix=J.
+    header = authorization(
+        "GET",
+        "examplebucket.s3.amazonaws.com",
+        "/",
+        {},
+        key_id="AKIAIOSFODNN7EXAMPLE",
+        secret="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        when=datetime(2013, 5, 24, tzinfo=timezone.utc),
+        query=canonical_query({"prefix": "J", "max-keys": "2"}),
+        region="us-east-1",
+        service="s3",
+    )
+    assert header.endswith("Signature=34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7")
+    # Sorted by name, every name and value encoded: also the slash a folder ends with.
+    assert canonical_query({"prefix": "conti 2026/è/", "list-type": "2", "delimiter": "/"}) == (
+        "delimiter=%2F&list-type=2&prefix=conti%202026%2F%C3%A8%2F"
     )
 
 
@@ -123,7 +144,7 @@ def test_a_name_is_signed_the_way_it_is_sent():
 ACCOUNT = "0123456789abcdef0123456789abcdef"  # an Account ID: 32 hexadecimal characters
 HOST_ONLY = "l'host non è <account>.r2.cloudflarestorage.com"
 NO_FILE = "dopo il nome del bucket manca il nome del file"
-NO_BUCKET = "dopo l'host mancano il nome del bucket e il nome del file"
+NO_BUCKET = "dopo l'host manca il nome del bucket"
 EXTRAS = "contiene «?» o «#»: niente parametri, e un nome di file senza quei segni"
 NO_LOGIN = "non deve contenere credenziali né una porta"
 
@@ -162,7 +183,7 @@ def test_an_address_that_is_not_a_file_in_a_bucket_is_refused_before_any_request
     # The reason says which part is wrong and shows the shape wanted, in words: the log is public,
     # and the address names the account, the bucket and the file.
     message = str(caught.value)
-    assert message == f"COSTS_R2_URL non valido: {reason}. Forma attesa: {r2.URL_SHAPE}"
+    assert message == f"COSTS_R2_URL non valido: {reason}. {r2.EXPECTED}"
     for given in (ACCOUNT, "case-private", "spese", "pub-0123", "example.com", "user", "pass", "Signature"):
         assert given not in message
 
@@ -267,11 +288,32 @@ def test_the_size_a_file_may_have_is_the_callers_to_say():
         fetch(URL, KEY_ID, SECRET, session=FakeSession(seven), now=NOW, max_bytes=2 * len(megabyte))
 
 
+def test_an_address_points_to_a_bucket_a_folder_or_a_file():
+    base = f"https://{ACCOUNT}.r2.cloudflarestorage.com"
+    for url, key, is_file, folder in (
+        (f"{base}/case-private", "", False, ""),
+        (f"{base}/case-private/", "", False, ""),
+        (f"{base}/case-private/conti/", "conti/", False, "conti/"),
+        (f"{base}/case-private/Spese case.xlsx", "Spese case.xlsx", True, ""),
+        (f"{base}/case-private/conti/2026/spese.xlsx", "conti/2026/spese.xlsx", True, "conti/2026/"),
+        (f"{base}/case-private/Spese%20case.xlsx", "Spese case.xlsx", True, ""),  # already encoded
+    ):
+        where = place(url)
+        assert (where.host, where.bucket, where.key) == (f"{ACCOUNT}.r2.cloudflarestorage.com", "case-private", key)
+        assert (where.names_a_file, where.folder) == (is_file, folder)
+    with pytest.raises(StorageError, match="dopo l'host manca il nome del bucket"):
+        place(base)
+
+
 def test_a_file_kept_beside_another_has_the_same_bucket_and_folder():
     base = "https://acc.r2.cloudflarestorage.com"
     assert sibling(f"{base}/case-private/Spese case.xlsx", "santa.jpg") == f"{base}/case-private/santa.jpg"
     assert sibling(f"{base}/b/conti/2026/spese.xlsx", "vassena.jpg") == f"{base}/b/conti/2026/vassena.jpg"
     assert sibling(f"{base}/b/Cartella con spazi/spese.xlsx", "santa.jpg") == f"{base}/b/Cartella%20con%20spazi/santa.jpg"
+    # An address of the bucket, or of a folder, is where the file goes.
+    assert sibling(f"{base}/case-private", "santa.jpg") == f"{base}/case-private/santa.jpg"
+    assert sibling(f"{base}/case-private/", "Spese case.xlsx") == f"{base}/case-private/Spese%20case.xlsx"
+    assert sibling(f"{base}/case-private/conti/", "santa.jpg") == f"{base}/case-private/conti/santa.jpg"
     # The name is one file's, whatever it contains: it cannot step out of the folder.
     assert sibling(f"{base}/b/conti/spese.xlsx", "../altro/x.jpg") == f"{base}/b/conti/..%2Faltro%2Fx.jpg"
     assert sibling(f" https://ACC.eu.r2.cloudflarestorage.com/b/spese.xlsx ", "casa mia.jpg") == "https://acc.eu.r2.cloudflarestorage.com/b/casa%20mia.jpg"
@@ -281,3 +323,81 @@ def test_a_file_kept_beside_another_has_the_same_bucket_and_folder():
     assert session.calls[0][0].endswith("/case-private/santa.jpg")
     with pytest.raises(StorageError, match="COSTS_R2_URL non valido"):
         sibling("https://example.com/b/spese.xlsx", "santa.jpg")
+
+
+# --------------------------------------------------------------------------- what is in a bucket
+
+BUCKET = f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private"
+
+
+def listed(*keys, truncated=False, prefix=""):
+    """What R2 answers when asked what a bucket holds, as S3 words it."""
+    contents = "".join(
+        f"<Contents><Key>{key}</Key><LastModified>2026-11-22T08:00:00.000Z</LastModified>"
+        f"<ETag>&quot;0123&quot;</ETag><Size>14559</Size><StorageClass>STANDARD</StorageClass></Contents>"
+        for key in keys
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        f"<Name>case-private</Name><Prefix>{prefix}</Prefix><Delimiter>/</Delimiter><MaxKeys>1000</MaxKeys>"
+        f"<IsTruncated>{'true' if truncated else 'false'}</IsTruncated>{contents}"
+        "<CommonPrefixes><Prefix>vecchi/</Prefix></CommonPrefixes><KeyCount>3</KeyCount>"
+        "</ListBucketResult>"
+    ).encode("utf-8")
+
+
+def test_the_files_of_a_bucket_are_asked_for_with_a_signed_get():
+    session = FakeSession(FakeResponse(chunks=(listed("Analisi Entrate-Spese.xlsx", "IMG_0001.jpeg", "foto &amp; altro.png"),)))
+    assert names(BUCKET, KEY_ID, SECRET, session=session, now=NOW) == ["Analisi Entrate-Spese.xlsx", "IMG_0001.jpeg", "foto & altro.png"]
+    (url, settings), = session.calls
+    host = f"{ACCOUNT}.r2.cloudflarestorage.com"
+    query = "delimiter=%2F&list-type=2&max-keys=1000"
+    assert url == f"https://{host}/case-private?{query}"  # the query as it is signed
+    assert settings["allow_redirects"] is False
+    assert settings["headers"]["Authorization"] == authorization(
+        "GET", host, "/case-private", {}, key_id=KEY_ID, secret=SECRET, when=NOW, query=query
+    )
+    assert session.response.closed
+
+
+def test_the_files_listed_are_those_of_the_folder_pointed_at_and_no_deeper():
+    def asked(url, *keys):
+        session = FakeSession(FakeResponse(chunks=(listed(*keys),)))
+        found = names(url, KEY_ID, SECRET, session=session, now=NOW)
+        return session.calls[0][0].split("?", 1)[1], found
+
+    # A folder: only what is directly in it, named without the folder.
+    query, found = asked(f"{BUCKET}/conti 2026/", "conti 2026/", "conti 2026/spese.xlsx", "conti 2026/santa.jpg")
+    assert query == "delimiter=%2F&list-type=2&max-keys=1000&prefix=conti%202026%2F"
+    assert found == ["spese.xlsx", "santa.jpg"]  # not the folder's own placeholder
+    # The address of a file: the folder that file is in.
+    query, found = asked(f"{BUCKET}/conti/spese.xlsx", "conti/spese.xlsx", "conti/vassena.jpg")
+    assert query.endswith("&prefix=conti%2F") and found == ["spese.xlsx", "vassena.jpg"]
+    query, found = asked(f"{BUCKET}/spese.xlsx", "spese.xlsx")
+    assert "prefix" not in query and found == ["spese.xlsx"]
+    # An empty bucket.
+    assert asked(BUCKET)[1] == []
+
+
+def test_a_listing_that_cannot_be_trusted_is_refused_in_words_that_name_nothing():
+    def refusal(response):
+        with pytest.raises(StorageError) as caught:
+            names(BUCKET, KEY_ID, SECRET, session=FakeSession(response), now=NOW)
+        message = str(caught.value)
+        for private in (ACCOUNT, "case-private", KEY_ID, SECRET, "Analisi"):
+            assert private not in message
+        return caught.value
+
+    assert "troppi file" in str(refusal(FakeResponse(chunks=(listed("Analisi.xlsx", truncated=True),))))
+    for junk in (b"", b"non sono un elenco", b"<html><body>errore</body></html>", b"<ListBucketResult><Contents>"):
+        assert str(refusal(FakeResponse(chunks=(junk,)))) == "risposta di Cloudflare R2 non riconosciuta"
+    # Nothing that would make the reader expand or fetch anything.
+    bomb = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><ListBucketResult><Contents><Key>&a;</Key></Contents></ListBucketResult>'
+    assert str(refusal(FakeResponse(chunks=(bomb,)))) == "risposta di Cloudflare R2 non riconosciuta"
+    assert "chiave rifiutata" in str(refusal(FakeResponse(403)))
+    assert str(refusal(FakeResponse(500))) == "HTTP 500"
+    missing = refusal(FakeResponse(404))
+    assert isinstance(missing, NotFound) and "bucket non trovato" in str(missing) and "«.eu.»" in str(missing)
+    endless = FakeResponse(chunks=(b"x" * (1024 * 1024),) * 3)
+    assert "troppo grande" in str(refusal(endless))
