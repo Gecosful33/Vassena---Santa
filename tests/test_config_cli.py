@@ -1,7 +1,7 @@
 import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import unquote
 
 import pytest
 
@@ -22,7 +22,7 @@ from casecal.family import encode_event
 from casecal.familylog import ISSUE_TITLE, GitHubLog
 from casecal.model import BOOKING, CLOSED, PropertySnapshot
 from casecal.photos import MAX_SOURCE_BYTES, prepare
-from casecal.r2 import NotFound, StorageError
+from casecal.r2 import Entry, NotFound, StorageError
 from casecal.site import extract_envelope
 from github_fake import TOKEN, FakeGitHub
 from pictures import picture
@@ -414,9 +414,9 @@ def published_figures(tmp_path):
     return open_envelope(extract_envelope(page), passphrase=GOOD_ENV["FAMILY_PASSPHRASE"])[1]
 
 
-def stand_in_bucket(files):
-    """What the bucket answers: ``files`` maps a file name to its bytes; any other name is not there."""
-    asked = []
+def stand_in_bucket(monkeypatch, files):
+    """Put a stand-in where the bucket is read: ``files`` maps a file name, as an address spells it, to its bytes."""
+    asked, listed = [], []
 
     def fetch(url, key_id, secret, **limits):
         asked.append((url, key_id, secret, limits))
@@ -425,15 +425,20 @@ def stand_in_bucket(files):
             raise NotFound("file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL")
         return files[name]
 
-    fetch.asked = asked
+    def entries(url, key_id, secret, **settings):
+        listed.append((url, key_id, secret))
+        return [Entry(unquote(name), len(held), "2026-11-22T08:00:00.000Z") for name, held in files.items()]
+
+    monkeypatch.setattr("casecal.r2.fetch", fetch)
+    monkeypatch.setattr("casecal.r2.entries", entries)
+    fetch.asked, fetch.listed = asked, listed
     return fetch
 
 
 def test_sync_publishes_the_costs_it_reads_from_the_bucket(monkeypatch, capsys, tmp_path):
-    bucket = stand_in_bucket({"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa Margherita")})})
-    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    bucket = stand_in_bucket(monkeypatch, {"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa Margherita")})})
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
-    assert bucket.asked[0] == (*BUCKET_ENV.values(), {})
+    assert bucket.asked == [(*BUCKET_ENV.values(), {})]  # the workbook, and nothing else: no file is a house's photo
     assert "spese: lette" in printed and "degraded=false" in outputs
     # No photo is kept beside the workbook: the houses have none. That is no fault, and the log
     # says so in a line of its own, where a photo uploaded under another name would be looked for.
@@ -451,6 +456,7 @@ def test_sync_without_the_settings_of_the_costs_publishes_no_profit_and_loss(mon
         raise AssertionError("the bucket must not be contacted in this scenario")
 
     monkeypatch.setattr("casecal.r2.fetch", never)
+    monkeypatch.setattr("casecal.r2.entries", never)
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None)
     assert published_figures(tmp_path)["costs"] == [] and family["photos"] == {}
     assert "spese" not in printed and "foto" not in printed and "degraded=false" in outputs
@@ -458,34 +464,33 @@ def test_sync_without_the_settings_of_the_costs_publishes_no_profit_and_loss(mon
 
 def test_sync_publishes_the_photos_kept_beside_the_workbook(monkeypatch, capsys, tmp_path):
     source = picture((1600, 1200))
-    bucket = stand_in_bucket({"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": source})
-    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    bucket = stand_in_bucket(monkeypatch, {
+        "spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": source, "IMG_0001.jpeg": picture(),
+    })
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     folder = BUCKET_ENV["COSTS_R2_URL"].rsplit("/", 1)[0]
-    # Each house's photo is looked for under the name the configuration gives it, if any,
-    # then under the house's own name with a photo's usual endings; the first found is it.
     houses = {prop.id: prop for prop in load_config(ROOT / "properties.toml").properties}
-    named = {house: ([quote(prop.photo)] if prop.photo else []) for house, prop in houses.items()}
-    assert [(url, limits) for url, _, _, limits in bucket.asked[1:]] == [
-        (f"{folder}/{name}", {"max_bytes": MAX_SOURCE_BYTES})
-        for name in named["santa"] + ["santa.jpg"] + named["vassena"] + ["vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp"]
-    ]
+    # The folder of the workbook is listed, and of what is there only the house's photo is fetched.
+    assert bucket.listed == [(BUCKET_ENV["COSTS_R2_URL"], BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])]
+    assert [(url, limits) for url, _, _, limits in bucket.asked[1:]] == [(f"{folder}/santa.jpg", {"max_bytes": MAX_SOURCE_BYTES})]
     # The house with a file has its picture, made small; the other one has none.
     assert family["photos"] == {"santa": prepare(source, houses["santa"].photo_focus).to_dict()}
     assert "foto: lette (santa)" in printed and "foto: nessun file per vassena" in printed
+    # A picture that bears no house's name is counted in the log, for whoever wonders where a photo went; never named.
+    assert "foto: nel bucket ci sono 1 immagini che non portano il nome di una casa" in printed and "IMG_0001" not in printed
     assert "degraded=false" in outputs
     assert "photos" not in published_figures(tmp_path)
 
 
 def test_sync_finds_the_workbook_in_a_bucket_given_by_its_address_alone(monkeypatch, capsys, tmp_path):
     address = f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private"  # as Cloudflare shows it for the bucket
-    bucket = stand_in_bucket({"Analisi%20Entrate-Spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")})})
-    listed = []
-    monkeypatch.setattr("casecal.r2.fetch", bucket)
-    monkeypatch.setattr("casecal.r2.names", lambda *settings: listed.append(settings) or ["IMG_0001.jpeg", "Analisi Entrate-Spese.xlsx"])
+    bucket = stand_in_bucket(monkeypatch, {
+        "Analisi%20Entrate-Spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "IMG_0001.jpeg": picture(),
+    })
     _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **{**BUCKET_ENV, "COSTS_R2_URL": address})
-    assert listed == [(address, BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])]
-    assert bucket.asked[0][0] == f"{address}/Analisi%20Entrate-Spese.xlsx"
+    # Listed once for the workbook and once for the photos.
+    assert bucket.listed == [(address, BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])] * 2
+    assert [url for url, *_ in bucket.asked] == [f"{address}/Analisi%20Entrate-Spese.xlsx"]
     assert "spese: lette" in printed and "degraded=false" in outputs
     assert [sheet["year"] for sheet in published_figures(tmp_path)["costs"]] == [2026]
     assert "Analisi" not in printed  # the name of the file is the owner's business
@@ -496,12 +501,11 @@ def test_sync_takes_the_account_alone_and_the_bucket_from_the_configuration(monk
     named = load_config(ROOT / "properties.toml").bucket
     assert named, "the repository's configuration names the bucket"
     address = f"https://{ACCOUNT}.r2.cloudflarestorage.com/{named}"
-    bucket = stand_in_bucket({"Spese%20case.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": picture()})
-    listed = []
-    monkeypatch.setattr("casecal.r2.fetch", bucket)
-    monkeypatch.setattr("casecal.r2.names", lambda *settings: listed.append(settings) or ["Spese case.xlsx"])
+    bucket = stand_in_bucket(monkeypatch, {
+        "Spese%20case.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": picture(),
+    })
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **{**BUCKET_ENV, "COSTS_R2_URL": f" {ACCOUNT.upper()}\n"})
-    assert listed == [(address, BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])]
+    assert bucket.listed == [(address, BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])] * 2
     assert bucket.asked[0][0] == f"{address}/Spese%20case.xlsx"
     assert {url.rsplit("/", 1)[0] for url, *_ in bucket.asked} == {address}
     assert "spese: lette" in printed and "foto: lette (santa)" in printed and "degraded=false" in outputs
@@ -514,7 +518,7 @@ def test_sync_says_what_is_wrong_with_an_address_left_with_its_blanks(monkeypatc
         raise AssertionError("the bucket must not be contacted in this scenario")
 
     monkeypatch.setattr("casecal.r2.fetch", never)
-    monkeypatch.setattr("casecal.r2.names", never)
+    monkeypatch.setattr("casecal.r2.entries", never)
     blank = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com/case-private"
     _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **{**BUCKET_ENV, "COSTS_R2_URL": blank})
     reason = "COSTS_R2_URL non valido: contiene ancora un segnaposto, come <ACCOUNT_ID>: al suo posto va il valore vero"
@@ -525,8 +529,7 @@ def test_sync_says_what_is_wrong_with_an_address_left_with_its_blanks(monkeypatc
 
 def test_sync_keeps_the_photos_already_published_when_one_cannot_be_read(monkeypatch, capsys, tmp_path):
     online = prepare(picture((900, 600)))
-    bucket = stand_in_bucket({"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": b"not a photo"})
-    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    stand_in_bucket(monkeypatch, {"spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": b"not a photo"})
     monkeypatch.setattr(cli, "previous_from_site", lambda site_url, **settings: sync.PreviousPage(photos={"santa": online}))
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     assert family["photos"] == {"santa": online.to_dict()}
@@ -541,6 +544,7 @@ def test_sync_keeps_the_costs_already_published_when_the_bucket_cannot_be_read(m
         raise StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
 
     monkeypatch.setattr("casecal.r2.fetch", refused)
+    monkeypatch.setattr("casecal.r2.entries", refused)
     monkeypatch.setattr(cli, "previous_from_site", lambda site_url, **settings: sync.PreviousPage(costs=[online]))
     _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     assert published_figures(tmp_path)["costs"] == [online.to_dict()]

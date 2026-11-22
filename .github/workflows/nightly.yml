@@ -33,7 +33,7 @@ jobs:
       issues: write     # solo per la segnalazione «Date da far bloccare al gestore»
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.redeployment.outputs.page_url }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -96,8 +96,21 @@ jobs:
         with:
           path: dist
 
+      # Capita che l'artefatto appena caricato non sia ancora visibile a chi lo pubblica
+      # («No artifacts named "github-pages" were found»): si aspetta un momento e si
+      # riprova una volta, prima di dare la pubblicazione per fallita.
       - name: Pubblica
         id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+
+      - name: Attendi prima di riprovare
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Pubblica (secondo tentativo)
+        id: redeployment
+        if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
 
       # GitHub disattiva i workflow schedulati dei repository pubblici dopo 60 giorni senza

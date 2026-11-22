@@ -307,6 +307,43 @@ class PhotosState:
     warnings: list[str]
     fresh: list[str] = field(default_factory=list)  # the houses whose photo was read in this run
     absent: list[str] = field(default_factory=list)  # the houses with no file in the bucket
+    stray: int = 0  # pictures in the bucket that bear no house's name
+
+
+# What a picture's name may end with. HEIC is not read, but a photo kept that way is still
+# the house's photo: better told to be of the wrong kind than taken for missing.
+_PICTURE_ENDINGS = FILE_ENDINGS + (".heic", ".heif")
+
+
+def _claimed(config: Config, held: Sequence[r2.Entry]) -> tuple[dict[str, list[r2.Entry]], int]:
+    """The files of the bucket that may be each house's photo, the likeliest first; and how many pictures are nobody's.
+
+    A house's photo is the file the configuration names for it, then the one
+    named after the house's id (``santa.jpg``, or another of a photo's usual
+    endings), then any picture whose name begins with that id, however it is
+    capitalised and whatever follows: a phone that saves a file twice calls
+    the second "santa 2.jpg". Of these last the newest comes first.
+    """
+    houses = sorted((prop.id for prop in config.properties), key=len, reverse=True)
+    named = {prop.photo: prop.id for prop in config.properties if prop.photo}
+    usual = {prop.id + ending: (prop.id, place) for prop in config.properties for place, ending in enumerate(FILE_ENDINGS)}
+    claims: dict[str, list[tuple[int, r2.Entry]]] = {prop.id: [] for prop in config.properties}
+    stray = 0
+    for entry in sorted(held, key=lambda entry: entry.modified, reverse=True):
+        folded = entry.name.casefold()
+        if entry.name in named:
+            claims[named[entry.name]].append((0, entry))
+        elif entry.name in usual:
+            house, place = usual[entry.name]
+            claims[house].append((1 + place, entry))
+        elif folded.endswith(_PICTURE_ENDINGS):
+            # The longest id first: "santa-alta.jpg" is the photo of a house called "santa-alta", if there is one.
+            house = next((id for id in houses if folded.startswith(id) and not folded[len(id)].isalnum()), None)
+            if house is None:
+                stray += 1
+            else:
+                claims[house].append((1 + len(FILE_ENDINGS), entry))
+    return {house: [entry for _, entry in sorted(found, key=lambda pair: pair[0])] for house, found in claims.items()}, stray
 
 
 def photos_state(
@@ -317,18 +354,22 @@ def photos_state(
     secret: str | None,
     load_previous: PreviousLoader,
     fetch: Callable[..., bytes] | None = None,
+    listing: Callable[[str, str, str], Sequence[r2.Entry]] | None = None,
 ) -> PhotosState:
     """A photo of each house, from the bucket that holds the workbook of costs.
 
-    The photo of a house is the file the configuration names for it, or the
-    one named after the house's id (``santa.jpg``, or one of the other endings
-    a photo is saved with), kept beside the workbook: ``url`` is the address
-    of the workbook or of its bucket (see ``costs_state``), and tells where to
-    look. A house without
-    such a file simply has no photo; that is no fault, and is only noted. A
-    file that cannot be fetched, or is not a photo, keeps the picture already
-    published and flags the run; like the costs, nothing about the photos can
-    stop the calendar.
+    ``url`` is the address of the workbook or of its bucket (see
+    ``costs_state``), and tells where to look: the photos are kept beside the
+    workbook. Which file is a house's photo is told by its name (see
+    ``_claimed``). A house without such a file simply has no photo; that is
+    no fault, and is only noted.
+
+    An upload from a phone may leave a name in the bucket and nothing under
+    it, or a photo in a format that is not read: such a file is passed over
+    for the next that may be the house's photo, so that uploading it again is
+    enough. Only when none of them can be made into a picture does the house
+    keep the one already published, and the run is flagged; like the costs,
+    nothing about the photos can stop the calendar.
     """
     given = [bool(url), bool(key_id), bool(secret)]
     if not any(given):
@@ -337,43 +378,56 @@ def photos_state(
         # Said once already, where the costs are read: here it only means "leave things as they are".
         return PhotosState(dict(load_previous().photos), [])
 
-    def stored(prop: PropertyConfig, where: str) -> bytes | None:
-        """The file kept for this house, under the first of its possible names that holds anything; None if there is none.
-
-        An upload from a phone may leave a name in the bucket and nothing under
-        it. Such a file is passed over for the next name, so that uploading the
-        photo again under the house's own name is enough; it is returned, empty
-        as it is, only when no other name holds the photo.
-        """
-        # The name the configuration gives it, if any, then the house's id with a photo's usual endings.
-        possible = ([prop.photo] if prop.photo else []) + [prop.id + ending for ending in FILE_ENDINGS]
-        left_empty = False
-        for name in possible:
-            try:
-                held = (fetch or r2.fetch)(r2.sibling(where, name), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
-            except r2.NotFound:
-                continue
-            if held:
-                return held
-            left_empty = True
-        return b"" if left_empty else None
-
     photos: dict[str, Photo] = {}
     fresh: list[str] = []
     absent: list[str] = []
     failed: dict[str, list[str]] = {}  # reason -> houses
-    for prop in config.properties:
-        try:
-            raw = stored(prop, r2.canonical(url, config.bucket))
-            if raw is None:
-                absent.append(prop.id)  # no photo of this house: nothing to show
-                continue
-            photos[prop.id] = prepare(raw, prop.photo_focus)
-            fresh.append(prop.id)
-        except (r2.StorageError, PhotoError) as exc:
-            failed.setdefault(str(exc), []).append(prop.id)  # written to be public
-        except Exception as exc:  # noqa: BLE001 - the calendar comes first
-            failed.setdefault(describe_error(exc), []).append(prop.id)
+    stray = 0
+
+    def read(prop: PropertyConfig, where: str, possible: Sequence[r2.Entry]) -> Photo | None:
+        """The picture made from the first of the house's files that can be made into one; None if it has no file."""
+        refusal: Exception | None = None
+        for entry in possible:
+            if entry.size == 0:
+                continue  # a name and nothing under it: the listing says so, no need to ask
+            try:
+                raw = (fetch or r2.fetch)(r2.sibling(where, entry.name), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+                return prepare(raw, prop.photo_focus)
+            except r2.NotFound:
+                continue  # removed since the bucket was listed
+            except (r2.StorageError, PhotoError) as exc:
+                refusal = refusal or exc  # the likeliest file's fault is the one worth telling
+        if refusal is not None:
+            raise refusal
+        empty = sum(1 for entry in possible if entry.size == 0)
+        if empty:
+            raise PhotoError(
+                "il file è vuoto (0 byte): il caricamento nel bucket non è riuscito, va caricato di nuovo" if empty == 1
+                else f"i {empty} file con il nome della casa sono tutti vuoti (0 byte): "
+                "il caricamento nel bucket non è riuscito, vanno caricati di nuovo"
+            )
+        return None
+
+    try:
+        where = r2.canonical(url, config.bucket)
+        claims, stray = _claimed(config, (listing or r2.entries)(where, key_id, secret))
+    except r2.StorageError as exc:
+        failed[str(exc)] = [prop.id for prop in config.properties]  # written to be public
+    except Exception as exc:  # noqa: BLE001 - the calendar comes first
+        failed[describe_error(exc)] = [prop.id for prop in config.properties]
+    else:
+        for prop in config.properties:
+            try:
+                photo = read(prop, where, claims[prop.id])
+                if photo is None:
+                    absent.append(prop.id)  # no photo of this house: nothing to show
+                    continue
+                photos[prop.id] = photo
+                fresh.append(prop.id)
+            except (r2.StorageError, PhotoError) as exc:
+                failed.setdefault(str(exc), []).append(prop.id)  # written to be public
+            except Exception as exc:  # noqa: BLE001 - the calendar comes first
+                failed.setdefault(describe_error(exc), []).append(prop.id)
 
     warnings: list[str] = []
     if failed:
@@ -383,7 +437,7 @@ def photos_state(
                 if house in published:
                     photos[house] = published[house]
             warnings.append(f"foto non lette ({reason}): {', '.join(houses)}; restano quelle già pubblicate")
-    return PhotosState(photos, warnings, fresh, absent)
+    return PhotosState(photos, warnings, fresh, absent, stray)
 
 
 def alert_owner(
