@@ -18,6 +18,7 @@ DEFAULT_CONFIG = "properties.toml"
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 _ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,30}$")
 _CLOCK_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+_BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$")  # what Cloudflare R2 lets a bucket be called
 
 DEFAULT_CHECK_IN = "15:00"
 DEFAULT_CHECK_OUT = "11:00"
@@ -32,6 +33,7 @@ DEFAULT_CHECK_OUT = "11:00"
 # turn on the profit and loss: where the owner's spreadsheet of running costs is
 # kept (a private Cloudflare R2 bucket) and the read-only key that fetches it.
 # The houses' photos are kept beside that spreadsheet and need no setting of their own.
+# COSTS_R2_URL may hold the Account ID alone when ``properties.toml`` names the bucket.
 COSTS_SECRETS = ("COSTS_R2_URL", "COSTS_R2_ACCESS_KEY_ID", "COSTS_R2_SECRET_ACCESS_KEY")
 OPTIONAL_SECRETS = (
     "FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS", "OWNER_PASSPHRASE", *COSTS_SECRETS
@@ -83,6 +85,10 @@ class Config:
     site_id: str = "casecal"
     note: str | None = None
     years_ahead: int = 1
+    # The private bucket that holds the workbook of costs and the photos, for when
+    # COSTS_R2_URL says which account it is and nothing else. A name is no secret:
+    # reading the bucket takes the account and the keys.
+    bucket: str | None = None
     properties: tuple[PropertyConfig, ...] = field(default_factory=tuple)
 
 
@@ -148,6 +154,12 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
     years_ahead = int(raw.get("years_ahead", 1))
     if not 0 <= years_ahead <= 3:
         raise ConfigError(f"{path}: years_ahead deve essere tra 0 e 3")
+    bucket = raw.get("bucket")
+    if bucket is not None and not (isinstance(bucket, str) and _BUCKET_RE.match(bucket)):
+        raise ConfigError(
+            f"{path}: bucket deve essere il nome di un bucket di Cloudflare R2 "
+            "(da 3 a 63 caratteri: minuscole, cifre e trattini)"
+        )
 
     return Config(
         title=str(raw.get("title", "Calendario case")),
@@ -155,6 +167,7 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
         site_id=str(raw.get("site_id") or os.environ.get("GITHUB_REPOSITORY") or "casecal"),
         note=raw.get("note") or None,
         years_ahead=years_ahead,
+        bucket=bucket,
         properties=tuple(properties),
     )
 

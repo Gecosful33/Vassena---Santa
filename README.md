@@ -158,7 +158,9 @@ Excel, o da un programma che salvi anche il risultato delle formule.
    lettura per notte restano nella fascia gratuita (10 GB e 10 milioni di letture al
    mese).
 2. `Create bucket`, con un nome a piacere (per esempio `case-private`). Un bucket nasce
-   privato: non vanno attivati né l'accesso pubblico (`r2.dev`) né un dominio.
+   privato: non vanno attivati né l'accesso pubblico (`r2.dev`) né un dominio. Il nome
+   va scritto in `properties.toml`, alla riga `bucket = "<nome>"`: non è un dato
+   riservato, perché per leggere il bucket servono l'account e le chiavi.
 3. Dentro il bucket, `Upload`, e caricare il file.
 4. In `R2 object storage → Overview`, riquadro `Account Details`: `Manage` accanto ad
    `API Tokens`, poi `Create Account API token` (o `Create User API token`: per un
@@ -172,16 +174,30 @@ Excel, o da un programma che salvi anche il risultato delle formule.
 
    | Nome | Valore |
    |---|---|
-   | `COSTS_R2_URL` | l'indirizzo «S3 API» del bucket: `https://<account>.r2.cloudflarestorage.com/<bucket>` |
+   | `COSTS_R2_URL` | l'Account ID di Cloudflare, copiato così com'è |
    | `COSTS_R2_ACCESS_KEY_ID` | l'Access Key ID |
    | `COSTS_R2_SECRET_ACCESS_KEY` | la Secret Access Key |
 
-   L'indirizzo è quello che Cloudflare mostra, pronto da copiare, nella scheda
-   `Settings` del bucket alla riga `S3 API`: contiene già l'account, il nome del bucket
-   e, per un bucket con giurisdizione europea, il `.eu.` nell'host. Va incollato così
-   com'è. Il job trova da solo il foglio: è l'unico file `.xlsx` del bucket. Solo se
-   nel bucket ci sono più file `.xlsx` bisogna dire quale, aggiungendo all'indirizzo
-   `/` e il nome del file scritto com'è, spazi compresi.
+   L'Account ID sono 32 caratteri tra cifre e lettere da `a` a `f`. Cloudflare lo
+   mostra, con il pulsante per copiarlo, in `R2 object storage → Overview` nel
+   riquadro `Account Details`; da qualunque pagina del pannello lo copia anche la
+   ricerca (`Search`, poi `Copy account ID`). Il bucket è quello di `properties.toml`
+   e il foglio è l'unico file `.xlsx` che contiene: non c'è nient'altro da scrivere.
+
+   In `COSTS_R2_URL` vanno bene anche, a scelta:
+
+   - l'indirizzo dell'API S3, `https://<account>.r2.cloudflarestorage.com`, da solo o
+     seguito da `/<bucket>`: è quello che Cloudflare mostra accanto alle chiavi;
+   - l'indirizzo della pagina del bucket nel pannello di Cloudflare, copiato dalla
+     barra del browser (`https://dash.cloudflare.com/<account>/r2/default/buckets/<bucket>`).
+
+   Al posto di `<account>` e `<bucket>` ci sono sempre i valori veri: una riga copiata
+   da queste istruzioni con i segnaposto non è un indirizzo. Per un bucket creato con
+   una giurisdizione (per esempio quella europea) serve una delle due forme con
+   l'indirizzo, che la contengono (`.eu.` nell'host, `eu` al posto di `default`): il
+   solo Account ID non la dice. Se nel bucket ci sono più file `.xlsx` bisogna dire
+   quale, con l'indirizzo dell'API S3 completo di `/<bucket>/<file>`, il nome scritto
+   com'è, spazi compresi.
 8. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare `spese: lette` e
    nella pagina, dopo le schede delle case, il tasto «P&L».
 
@@ -494,10 +510,14 @@ somma delle voci.
 | `N voci del registro di famiglia non si aprono con la password attuale` | password cambiata | impostare `OLD_FAMILY_PASSPHRASE` per un'esecuzione |
 | `FAMILY_GROUPS: …` | un nome ripetuto, troppo lungo, o più di 8 nomi | correggere il secret: la pagina usa intanto i nomi validi |
 | `avviso al proprietario non aggiornato (…)` | GitHub ha rifiutato la scrittura della segnalazione | controllare che il workflow abbia ancora `issues: write`; l'elenco nella pagina resta corretto |
+| `spese non lette (COSTS_R2_URL non valido: …)` | il valore del secret non dice dov'è il bucket; il messaggio dice perché: è rimasto un segnaposto come `<ACCOUNT_ID>`, l'Account ID non ha 32 caratteri, c'è una chiave al posto dell'indirizzo, è l'indirizzo pubblico `r2.dev`… | incollare nel secret l'Account ID, come al punto 7 del passo 7; nessuna richiesta è partita, quindi le chiavi non sono ancora state provate |
+| `spese non lette (firma rifiutata: …)` | la Secret Access Key non è quella dell'Access Key ID: incollata male, oppure è il `Token value` | creare un nuovo token (punti 4–6 del passo 7) e ricopiare le due chiavi |
+| `spese non lette (Access Key ID non riconosciuto …)` | Access Key ID incollato male, oppure token eliminato | come sopra |
+| `spese non lette (accesso negato: …)` | la chiave è valida ma non può leggere quel bucket: token limitato a un altro bucket o senza permesso di lettura, oppure nome del bucket sbagliato in `properties.toml` | correggere il nome del bucket, o creare un token `Object Read only` limitato a quel bucket |
 | `spese non lette (chiave rifiutata, …)` | chiave di R2 sbagliata, scaduta o non valida per quel bucket | ripetere i punti 4–7 del passo 7 |
-| `spese non lette (file non trovato: …)` | bucket o file con un nome diverso da quello in `COSTS_R2_URL`, anche solo per una maiuscola; oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'indirizzo | correggere il secret, o ricaricare il file con il nome atteso |
-| `spese non lette (COSTS_R2_URL non valido: …)` | l'indirizzo non è quello del bucket; il messaggio dice quale parte manca o non va (di solito il nome del bucket dopo l'endpoint, oppure si è incollato l'indirizzo pubblico `r2.dev` o quello del pannello) | incollare nel secret l'indirizzo «S3 API» del bucket, come al passo 7; nessuna richiesta è partita, quindi le chiavi non sono ancora state provate |
-| `spese non lette (bucket non trovato: …)` | nome del bucket sbagliato, oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'host | ricopiare l'indirizzo «S3 API» dalle impostazioni del bucket |
+| `… Nota: COSTS_R2_… non ha la forma di …` | aggiunta a un rifiuto quando una delle due chiavi non ha la lunghezza di una chiave di R2 (32 e 64 caratteri esadecimali), o le due sembrano scambiate | ricopiare le chiavi nei secret giusti |
+| `spese non lette (file non trovato: …)` | file con un nome diverso da quello in `COSTS_R2_URL`, anche solo per una maiuscola | correggere il secret, o ricaricare il file con il nome atteso |
+| `spese non lette (bucket non trovato: …)` | nome del bucket sbagliato, oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'host | correggere `bucket` in `properties.toml`; per un bucket con giurisdizione, mettere in `COSTS_R2_URL` l'indirizzo della sua pagina nel pannello |
 | `spese non lette (nel bucket non c'è nessun file Excel (.xlsx))` | il foglio non è stato caricato, o è un `.xls` | caricare il foglio in formato `.xlsx` |
 | `spese non lette (nel bucket ci sono più file Excel (.xlsx): …)` | il job non sa quale sia il foglio delle spese | aggiungere a `COSTS_R2_URL` `/` e il nome del file, oppure togliere dal bucket quelli in più |
 | `spese non lette (servono tutti e tre i secret …)` | manca uno dei tre secret | completare il passo 7 |

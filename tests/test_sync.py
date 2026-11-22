@@ -1,4 +1,5 @@
 import base64
+from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from urllib.parse import unquote
@@ -267,7 +268,9 @@ COSTS = CostSheet(
     lines=(CostLine("IMU", {"santa": 145000, "vassena": 390050}, "stima"), CostLine("Giardiniere", {"santa": None, "vassena": 240000})),
     updated=date(2026, 9, 1),
 )
-BUCKET = dict(url="https://acc.r2.cloudflarestorage.com/case-private/spese.xlsx", key_id="key-id-0123", secret="key-secret-4567")
+ACCOUNT = "0123456789abcdef0123456789abcdef"  # an Account ID: 32 hexadecimal characters
+STORE = f"https://{ACCOUNT}.r2.cloudflarestorage.com"
+BUCKET = dict(url=f"{STORE}/case-private/spese.xlsx", key_id="key-id-0123", secret="key-secret-4567")
 
 
 def never_fetched(url, key_id, secret):
@@ -349,7 +352,7 @@ def test_a_workbook_that_cannot_be_fetched_or_read_keeps_the_costs_already_publi
 
 def test_the_address_of_the_bucket_alone_is_enough_to_find_the_workbook():
     # What Cloudflare shows, ready to be copied, among the settings of a bucket: no file name to get wrong.
-    folder = "https://acc.r2.cloudflarestorage.com/case-private"
+    folder = f"{STORE}/case-private"
     book = workbook({"2026": year_rows("Vassena", "Santa")})
     asked = []
 
@@ -395,6 +398,51 @@ def test_the_address_of_the_bucket_alone_is_enough_to_find_the_workbook():
     assert state.fresh and asked == [BUCKET["url"]]
 
 
+def test_the_account_alone_is_enough_when_the_configuration_names_the_bucket():
+    # What its owner can copy from Cloudflare without composing anything: the Account ID, the
+    # endpoint shown beside the keys, or the address of the bucket's page in the dashboard.
+    named = replace(CONFIG, bucket="case-private")
+    folder = f"{STORE}/case-private"
+    book = workbook({"2026": year_rows("Vassena", "Santa")})
+    for pasted in (ACCOUNT, f"  {ACCOUNT.upper()}\n", STORE, f"{STORE}/",
+                   f"https://dash.cloudflare.com/{ACCOUNT}/r2/default/buckets/case-private/settings",
+                   f"https://dash.cloudflare.com/{ACCOUNT}/r2/overview"):
+        listed, asked = [], []
+
+        def listing(url, key_id, secret):
+            listed.append(url)
+            return ["IMG_0001.jpeg", "Spese case.xlsx"]
+
+        def fetch(url, key_id, secret):
+            asked.append(url)
+            return book
+
+        state = costs_state(named, **{**BUCKET, "url": pasted}, load_previous=no_previous, fetch=fetch, listing=listing)
+        assert state.fresh and state.warnings == []
+        assert listed == [folder] and asked == [f"{folder}/Spese%20case.xlsx"]
+        # The photos are looked for in the same place.
+        held = bucket({"santa.jpg": picture(), "vassena.png": picture((600, 400), "PNG")})
+        photos = photos_state(named, **{**BUCKET, "url": pasted}, load_previous=no_previous, fetch=held)
+        assert photos.fresh == ["santa", "vassena"] and photos.warnings == []
+        assert {url.rsplit("/", 1)[0] for url, *_ in held.asked} == {folder}
+
+    # Without a bucket in the configuration the account alone does not say where to look.
+    state = costs_state(CONFIG, **{**BUCKET, "url": ACCOUNT}, load_previous=published_with_costs, fetch=never_fetched, listing=never_fetched)
+    assert state.sheets == [COSTS] and "COSTS_R2_URL non valido: manca il nome del bucket" in state.warnings[0]
+
+
+def test_an_address_left_with_its_blanks_is_said_to_be_so_for_costs_and_photos_alike():
+    named = replace(CONFIG, bucket="case-private")
+    pasted = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com/case-private"  # the line of the instructions, as it was
+    reason = f"COSTS_R2_URL non valido: contiene ancora un segnaposto, come <ACCOUNT_ID>: al suo posto va il valore vero. {r2.EXPECTED}"
+    state = costs_state(named, **{**BUCKET, "url": pasted}, load_previous=published_with_costs, fetch=never_fetched, listing=never_fetched)
+    assert state.sheets == [COSTS] and not state.fresh
+    assert state.warnings == [f"spese non lette ({reason}): restano quelle già pubblicate"]
+    photos = photos_state(named, **{**BUCKET, "url": pasted}, load_previous=published_with_photos, fetch=never_fetched)
+    assert photos.photos == ONLINE and photos.fresh == [] and photos.absent == []
+    assert photos.warnings == [f"foto non lette ({reason}): santa, vassena; restano quelle già pubblicate"]
+
+
 def test_the_bucket_is_read_through_the_signed_fetch_unless_told_otherwise(monkeypatch):
     asked = []
     monkeypatch.setattr(r2, "fetch", lambda *settings: asked.append(settings) or workbook({"2026": year_rows("Vassena", "Santa")}))
@@ -419,7 +467,7 @@ def test_the_costs_travel_with_the_figures_and_are_recovered_from_the_published_
 # --------------------------------------------------------------------------- the houses' photos
 
 ONLINE = {"santa": Photo(b"the picture of santa already online"), "vassena": Photo(b"the picture of vassena already online")}
-FOLDER = "https://acc.r2.cloudflarestorage.com/case-private"
+FOLDER = f"{STORE}/case-private"
 
 
 def published_with_photos() -> PreviousPage:

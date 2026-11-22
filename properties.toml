@@ -1,8 +1,8 @@
 # Case mostrate nel calendario.
 #
-# Questo file è pubblico: contiene solo i nomi delle case. Indirizzi dei portali,
-# utenti, password e la passphrase della pagina stanno nei secret di GitHub Actions
-# (vedi README), mai qui.
+# Questo file è pubblico: contiene solo nomi (delle case, del bucket, dei file delle
+# foto). Indirizzi dei portali, utenti, password, chiavi e la passphrase della pagina
+# stanno nei secret di GitHub Actions (vedi README), mai qui.
 
 title = "Calendario case"
 timezone = "Europe/Rome"
@@ -15,6 +15,12 @@ years_ahead = 1
 # tutte le case; una casa con orari diversi li ridefinisce nel proprio blocco [[property]].
 check_in = "15:00"
 check_out = "11:00"
+
+# Bucket privato di Cloudflare R2 con il foglio delle spese e le foto delle case (vedi
+# README). Il nome non è un dato riservato: per leggere il bucket servono l'account e le
+# chiavi, che stanno nei secret. Con il nome scritto qui, nel secret COSTS_R2_URL basta
+# l'Account ID di Cloudflare.
+bucket = "vassenasanta"
 
 # Nota facoltativa mostrata in fondo alla pagina (finisce cifrata, ma qui è in chiaro).
 # note = "Per usare una casa scrivi nel gruppo di famiglia."
