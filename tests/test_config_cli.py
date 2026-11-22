@@ -141,6 +141,24 @@ def test_an_impossible_photo_setting_is_refused(tmp_path, line, message):
         load_config(write_config(tmp_path, f'[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n{line}\n'))
 
 
+def test_the_configuration_may_name_the_bucket_of_costs_and_photos(tmp_path):
+    assert load_config(write_config(tmp_path, HOUSE)).bucket is None
+    assert load_config(write_config(tmp_path, 'bucket = "case-private-2"\n' + HOUSE)).bucket == "case-private-2"
+    # The repository's own names one: with it, the Account ID is all COSTS_R2_URL has to say.
+    assert load_config(ROOT / "properties.toml").bucket
+
+
+@pytest.mark.parametrize(
+    "line",
+    ['bucket = ""', 'bucket = "ab"', 'bucket = "Case-Private"', 'bucket = "case_private"', 'bucket = "-case"',
+     'bucket = "case-"', 'bucket = "case private"', 'bucket = "cartella/case"', f'bucket = "{"a" * 64}"', "bucket = 7",
+     'bucket = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/case"'],
+)
+def test_a_name_no_bucket_can_have_is_refused(tmp_path, line):
+    with pytest.raises(ConfigError, match="bucket deve essere il nome di un bucket di Cloudflare R2"):
+        load_config(write_config(tmp_path, line + "\n" + HOUSE))
+
+
 def test_missing_file_is_a_configuration_error(tmp_path):
     with pytest.raises(ConfigError, match="non trovato"):
         load_config(tmp_path / "nope.toml")
@@ -231,8 +249,9 @@ def test_check_says_whether_the_family_can_edit(monkeypatch, capsys):
 
 
 # Where the owner's workbook of costs is kept, and the read-only key that fetches it.
+ACCOUNT = "0123456789abcdef0123456789abcdef"  # an Account ID: 32 hexadecimal characters
 BUCKET_ENV = {
-    "COSTS_R2_URL": "https://acc0123.r2.cloudflarestorage.com/case-private/spese.xlsx",
+    "COSTS_R2_URL": f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private/spese.xlsx",
     "COSTS_R2_ACCESS_KEY_ID": "key-id-0123456789",
     "COSTS_R2_SECRET_ACCESS_KEY": "key-secret-9876543210",
 }
@@ -250,6 +269,16 @@ def test_check_says_whether_the_costs_behind_the_profit_and_loss_are_set_up(monk
     assert code == cli.EXIT_OK  # the calendar itself is fine
     assert "configurazione incompleta, manca COSTS_R2_ACCESS_KEY_ID, COSTS_R2_SECRET_ACCESS_KEY" in output
     assert BUCKET_ENV["COSTS_R2_URL"] not in output
+    # An address that cannot be right is said to be so before any run, in words that do not repeat it.
+    # The repository's own configuration names the bucket, so the Account ID alone is a complete address.
+    for good in (ACCOUNT, f"https://{ACCOUNT}.r2.cloudflarestorage.com"):
+        code, output = run_cli(monkeypatch, capsys, ["check"], {**GOOD_ENV, **BUCKET_ENV, "COSTS_R2_URL": good})
+        assert code == cli.EXIT_OK and "spese per il P&L: configurate" in output and ACCOUNT not in output
+    blank = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com/case-private"
+    code, output = run_cli(monkeypatch, capsys, ["check"], {**GOOD_ENV, **BUCKET_ENV, "COSTS_R2_URL": blank})
+    assert code == cli.EXIT_OK  # the calendar itself is fine
+    assert "spese per il P&L: COSTS_R2_URL non valido: contiene ancora un segnaposto" in output
+    assert "configurate" not in output and "case-private" not in output
 
 
 def test_check_names_what_is_missing_without_printing_values(monkeypatch, capsys):
@@ -449,7 +478,7 @@ def test_sync_publishes_the_photos_kept_beside_the_workbook(monkeypatch, capsys,
 
 
 def test_sync_finds_the_workbook_in_a_bucket_given_by_its_address_alone(monkeypatch, capsys, tmp_path):
-    address = "https://acc0123.r2.cloudflarestorage.com/case-private"  # as Cloudflare shows it for the bucket
+    address = f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private"  # as Cloudflare shows it for the bucket
     bucket = stand_in_bucket({"Analisi%20Entrate-Spese.xlsx": workbook({"2026": year_rows("Vassena", "Santa")})})
     listed = []
     monkeypatch.setattr("casecal.r2.fetch", bucket)
@@ -460,6 +489,38 @@ def test_sync_finds_the_workbook_in_a_bucket_given_by_its_address_alone(monkeypa
     assert "spese: lette" in printed and "degraded=false" in outputs
     assert [sheet["year"] for sheet in published_figures(tmp_path)["costs"]] == [2026]
     assert "Analisi" not in printed  # the name of the file is the owner's business
+
+
+def test_sync_takes_the_account_alone_and_the_bucket_from_the_configuration(monkeypatch, capsys, tmp_path):
+    # The Account ID is all its owner pastes: the repository's configuration says which bucket it is.
+    named = load_config(ROOT / "properties.toml").bucket
+    assert named, "the repository's configuration names the bucket"
+    address = f"https://{ACCOUNT}.r2.cloudflarestorage.com/{named}"
+    bucket = stand_in_bucket({"Spese%20case.xlsx": workbook({"2026": year_rows("Vassena", "Santa")}), "santa.jpg": picture()})
+    listed = []
+    monkeypatch.setattr("casecal.r2.fetch", bucket)
+    monkeypatch.setattr("casecal.r2.names", lambda *settings: listed.append(settings) or ["Spese case.xlsx"])
+    family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **{**BUCKET_ENV, "COSTS_R2_URL": f" {ACCOUNT.upper()}\n"})
+    assert listed == [(address, BUCKET_ENV["COSTS_R2_ACCESS_KEY_ID"], BUCKET_ENV["COSTS_R2_SECRET_ACCESS_KEY"])]
+    assert bucket.asked[0][0] == f"{address}/Spese%20case.xlsx"
+    assert {url.rsplit("/", 1)[0] for url, *_ in bucket.asked} == {address}
+    assert "spese: lette" in printed and "foto: lette (santa)" in printed and "degraded=false" in outputs
+    assert set(family["photos"]) == {"santa"}
+    assert ACCOUNT not in printed and ACCOUNT.upper() not in printed
+
+
+def test_sync_says_what_is_wrong_with_an_address_left_with_its_blanks(monkeypatch, capsys, tmp_path):
+    def never(*settings, **limits):
+        raise AssertionError("the bucket must not be contacted in this scenario")
+
+    monkeypatch.setattr("casecal.r2.fetch", never)
+    monkeypatch.setattr("casecal.r2.names", never)
+    blank = "https://<ACCOUNT_ID>.r2.cloudflarestorage.com/case-private"
+    _, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **{**BUCKET_ENV, "COSTS_R2_URL": blank})
+    reason = "COSTS_R2_URL non valido: contiene ancora un segnaposto, come <ACCOUNT_ID>: al suo posto va il valore vero"
+    assert f"spese: spese non lette ({reason}" in printed
+    assert f"foto: foto non lette ({reason}" in printed and "santa, vassena; restano quelle già pubblicate" in printed
+    assert "degraded=true" in outputs and "case-private" not in printed
 
 
 def test_sync_keeps_the_photos_already_published_when_one_cannot_be_read(monkeypatch, capsys, tmp_path):

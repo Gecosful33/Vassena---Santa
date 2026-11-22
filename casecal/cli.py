@@ -8,6 +8,7 @@ import sys
 from datetime import datetime, timezone
 from typing import Sequence
 
+from . import r2
 from .config import (
     COSTS_SECRETS,
     DEFAULT_CONFIG,
@@ -95,7 +96,13 @@ def cmd_check(args: argparse.Namespace) -> int:
         missing = ", ".join(name for name in COSTS_SECRETS if name not in costs)
         _problem("warning", f"spese per il P&L: configurazione incompleta, manca {missing}")
     else:
-        _say("spese per il P&L: configurate")
+        try:
+            # Only the shape of the address can be told without asking Cloudflare.
+            r2.canonical(os.environ["COSTS_R2_URL"], config.bucket)
+        except r2.StorageError as exc:
+            _problem("warning", f"spese per il P&L: {exc}")
+        else:
+            _say("spese per il P&L: configurate")
     return EXIT_OK
 
 

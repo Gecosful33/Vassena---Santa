@@ -6,12 +6,27 @@ import pytest
 import requests
 
 from casecal import r2
-from casecal.r2 import EMPTY_SHA256, MAX_BYTES, NotFound, StorageError, authorization, canonical_query, fetch, names, place, sibling
+from casecal.r2 import (
+    EMPTY_SHA256,
+    MAX_BYTES,
+    NotFound,
+    StorageError,
+    authorization,
+    canonical,
+    canonical_query,
+    fetch,
+    names,
+    place,
+    sibling,
+)
 
 NOW = datetime(2026, 11, 21, 2, 17, 5, tzinfo=timezone.utc)
-URL = "https://0123456789abcdef0123456789abcdef.r2.cloudflarestorage.com/case-private/Spese case.xlsx"
+ACCOUNT = "0123456789abcdef0123456789abcdef"  # an Account ID: 32 hexadecimal characters
+API = f"https://{ACCOUNT}.r2.cloudflarestorage.com"
+URL = f"{API}/case-private/Spese case.xlsx"
+# A key pair shaped like R2's (32 and 64 hexadecimal characters), and plainly not one.
 KEY_ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
-SECRET = "a-secret-that-is-not-one-0123456789abcdef0123456789abcdef"
+SECRET = "00112233445566778899aabbccddeeff" * 2
 
 
 def test_the_signature_is_the_one_amazon_publishes_for_its_worked_example():
@@ -128,23 +143,29 @@ def test_a_name_is_signed_the_way_it_is_sent():
         fetch(url, KEY_ID, SECRET, session=session, now=NOW)
         return session.calls[0][0].split(".com", 1)[1]
 
-    base = "https://acc.r2.cloudflarestorage.com"
-    assert path_of(f"{base}/b/Analisi (2026) è.xlsx") == "/b/Analisi%20%282026%29%20%C3%A8.xlsx"
-    assert path_of(f"{base}/b/Analisi%20%282026%29.xlsx") == "/b/Analisi%20%282026%29.xlsx"  # already encoded
-    assert path_of(f"{base}/b/cartella/file_v1.2~bozza.xlsx") == "/b/cartella/file_v1.2~bozza.xlsx"
+    assert path_of(f"{API}/b/Analisi (2026) è.xlsx") == "/b/Analisi%20%282026%29%20%C3%A8.xlsx"
+    assert path_of(f"{API}/b/Analisi%20%282026%29.xlsx") == "/b/Analisi%20%282026%29.xlsx"  # already encoded
+    assert path_of(f"{API}/b/cartella/file_v1.2~bozza.xlsx") == "/b/cartella/file_v1.2~bozza.xlsx"
     # Stray spaces around a pasted secret, a bucket in the European jurisdiction, capitals in the host.
-    assert path_of("  https://ACC.eu.r2.cloudflarestorage.com/b/f.xlsx \n") == "/b/f.xlsx"
-    session = FakeSession()
-    fetch(URL, f"  {KEY_ID}\n", f" {SECRET} ", session=session, now=NOW)
-    assert session.calls[0][1]["headers"]["Authorization"] == authorization(
+    assert path_of(f"  https://{ACCOUNT.upper()}.eu.r2.cloudflarestorage.com/b/f.xlsx \n") == "/b/f.xlsx"
+    # The keys as they may be pasted: with a space or a line break, in quotes, with a character
+    # nobody sees that came along from a chat.
+    expected = authorization(
         "GET", URL.split("/")[2], "/case-private/Spese%20case.xlsx", {}, key_id=KEY_ID, secret=SECRET, when=NOW
     )
+    for key_id, secret in ((f"  {KEY_ID}\n", f" {SECRET} "), (f'"{KEY_ID}"', f"'{SECRET}'"), (f"\u200b{KEY_ID}", f"{SECRET}\ufeff")):
+        session = FakeSession()
+        fetch(URL, key_id, secret, session=session, now=NOW)
+        assert session.calls[0][1]["headers"]["Authorization"] == expected
 
 
-ACCOUNT = "0123456789abcdef0123456789abcdef"  # an Account ID: 32 hexadecimal characters
 HOST_ONLY = "l'host non è <account>.r2.cloudflarestorage.com"
 NO_FILE = "dopo il nome del bucket manca il nome del file"
-NO_BUCKET = "dopo l'host manca il nome del bucket"
+NO_BUCKET = "manca il nome del bucket"
+NO_ACCOUNT = "davanti a «.r2.cloudflarestorage.com» manca l'Account ID"
+ODD_ACCOUNT = "davanti a «.r2.cloudflarestorage.com» non c'è un Account ID: sono 32 caratteri, solo cifre e lettere da a a f"
+BLANK = "contiene ancora un segnaposto, come <ACCOUNT_ID>: al suo posto va il valore vero"
+A_KEY = "sembra una delle due chiavi, non un indirizzo: le chiavi vanno negli altri due secret"
 EXTRAS = "contiene «?» o «#»: niente parametri, e un nome di file senza quei segni"
 NO_LOGIN = "non deve contenere credenziali né una porta"
 
@@ -153,26 +174,47 @@ NO_LOGIN = "non deve contenere credenziali né una porta"
     "url, reason",
     [
         # What is most often pasted: the endpoint shown beside the keys, or the bucket's own address.
-        (f"https://{ACCOUNT}.r2.cloudflarestorage.com", NO_BUCKET),
-        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/", NO_BUCKET),
+        (API, NO_BUCKET),
+        (f"{API}/", NO_BUCKET),
         (f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com", NO_BUCKET),
-        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private", NO_FILE),
-        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private/", NO_FILE),
-        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private/cartella/", NO_FILE),
+        (ACCOUNT, NO_BUCKET),                                                        # the Account ID alone
+        (f"{API}/case-private", NO_FILE),
+        (f"{API}/case-private/", NO_FILE),
+        (f"{API}/case-private/cartella/", NO_FILE),
+        (f"https://dash.cloudflare.com/{ACCOUNT}/r2/default/buckets/case-private", NO_FILE),  # the bucket's page
+        # The line of the instructions, copied with its blanks still to be filled in.
+        ("https://<ACCOUNT_ID>.r2.cloudflarestorage.com/case-private", BLANK),
+        ("https://<ACCOUNT_ID>.r2.cloudflarestorage.com/<nome-bucket>/<nome-file>.xlsx", BLANK),
+        (f"{API}/<bucket>", BLANK),
+        ("<ACCOUNT_ID>", BLANK),
+        ("https://ACCOUNT_ID.r2.cloudflarestorage.com/case-private", BLANK),
+        ("https://account-id.r2.cloudflarestorage.com/case-private", BLANK),
+        ("ACCOUNT ID", BLANK),
+        # Something else where the Account ID goes: a name, or the ID with a character lost in copying.
+        ("https://acc.r2.cloudflarestorage.com/b/f.xlsx", ODD_ACCOUNT),
+        (f"https://{ACCOUNT[:-1]}.r2.cloudflarestorage.com/case-private/spese.xlsx", ODD_ACCOUNT),
+        (f"https://{ACCOUNT}0.r2.cloudflarestorage.com/case-private/spese.xlsx", ODD_ACCOUNT),
+        (f"https://{ACCOUNT[:-1]}g.r2.cloudflarestorage.com/case-private/spese.xlsx", ODD_ACCOUNT),
+        ("https://r2.cloudflarestorage.com/b/f.xlsx", NO_ACCOUNT),
+        (f"https://{ACCOUNT}.eu.altro.r2.cloudflarestorage.com/b/f.xlsx", HOST_ONLY),
+        (SECRET, A_KEY),                                                             # a key, in the wrong secret
         ("https://pub-0123.r2.dev/spese.xlsx", "è l'indirizzo pubblico r2.dev, serve quello dell'API S3"),
-        (f"https://dash.cloudflare.com/{ACCOUNT}/r2/default/buckets/case-private",
-         "è una pagina del pannello di Cloudflare, serve l'indirizzo dell'API S3"),
-        ("http://acc.r2.cloudflarestorage.com/b/f.xlsx", "deve iniziare con https://"),  # not encrypted in transit
+        ("https://dash.cloudflare.com/?to=/:account/r2/overview",
+         "è una pagina del pannello di Cloudflare in cui non compare l'Account ID"),
+        ("https://dash.cloudflare.com/login", "è una pagina del pannello di Cloudflare in cui non compare l'Account ID"),
+        (f"https://dash.cloudflare.com/{ACCOUNT}/r2/overview", "è una pagina del pannello di Cloudflare, ma non quella di un bucket"),
+        (f"https://dash.cloudflare.com/{ACCOUNT}/home", "è una pagina del pannello di Cloudflare, ma non quella di un bucket"),
+        ("https://developers.cloudflare.com/r2/", "è una pagina di Cloudflare, non l'indirizzo dell'API S3"),
+        (f"http://{ACCOUNT}.r2.cloudflarestorage.com/b/f.xlsx", "deve iniziare con https://"),  # not encrypted in transit
         ("https://example.com/b/f.xlsx", HOST_ONLY),
-        ("https://r2.cloudflarestorage.com/b/f.xlsx", HOST_ONLY),                    # no account
-        ("https://acc.r2.cloudflarestorage.com.example.com/b/f.xlsx", HOST_ONLY),
+        (f"https://{ACCOUNT}.r2.cloudflarestorage.com.example.com/b/f.xlsx", HOST_ONLY),
         ("case-private/spese.xlsx", HOST_ONLY),                                      # a bucket and a file, nowhere
         ("", HOST_ONLY),
-        ("https://acc.r2.cloudflarestorage.com/b/f.xlsx?X-Amz-Signature=abc", EXTRAS),  # a presigned link
-        ("https://acc.r2.cloudflarestorage.com/b/f.xlsx#foglio", EXTRAS),
-        ("https://user:pass@acc.r2.cloudflarestorage.com/b/f.xlsx", NO_LOGIN),
-        ("https://acc.r2.cloudflarestorage.com:8443/b/f.xlsx", NO_LOGIN),
-        ("https://acc.r2.cloudflarestorage.com:porta/b/f.xlsx", "non è un indirizzo"),
+        (f"{API}/b/f.xlsx?X-Amz-Signature=abc", EXTRAS),                             # a presigned link
+        (f"{API}/b/f.xlsx#foglio", EXTRAS),
+        (f"https://user:pass@{ACCOUNT}.r2.cloudflarestorage.com/b/f.xlsx", NO_LOGIN),
+        (f"{API}:8443/b/f.xlsx", NO_LOGIN),
+        (f"{API}:porta/b/f.xlsx", "non è un indirizzo"),
     ],
 )
 def test_an_address_that_is_not_a_file_in_a_bucket_is_refused_before_any_request(url, reason):
@@ -184,8 +226,35 @@ def test_an_address_that_is_not_a_file_in_a_bucket_is_refused_before_any_request
     # and the address names the account, the bucket and the file.
     message = str(caught.value)
     assert message == f"COSTS_R2_URL non valido: {reason}. {r2.EXPECTED}"
-    for given in (ACCOUNT, "case-private", "spese", "pub-0123", "example.com", "user", "pass", "Signature"):
+    for given in (ACCOUNT, ACCOUNT[:-1], "case-private", "spese", "pub-0123", "example.com", "user", "pass", "Signature", SECRET):
         assert given not in message
+
+
+def test_what_the_owner_has_at_hand_is_enough_to_say_where_the_bucket_is():
+    plain = f"{API}/case-private"
+    european = f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com/case-private"
+    # The Account ID alone, or the endpoint Cloudflare shows beside the keys: the configuration names the bucket.
+    for pasted in (ACCOUNT, ACCOUNT.upper(), f" {ACCOUNT}\n", f'"{ACCOUNT}"', f"“{ACCOUNT}”", f"\u200b{ACCOUNT}\ufeff", API, f"{API}/"):
+        assert canonical(pasted, "case-private") == plain
+    assert canonical(f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com", "case-private") == european
+    # A bucket the address names itself is the one meant, whatever the configuration says.
+    assert canonical(plain, "un-altro") == plain and canonical(f"{ACCOUNT}/case-private", "un-altro") == plain
+    assert canonical(f"{plain}/conti/Spese case.xlsx", "un-altro") == f"{plain}/conti/Spese%20case.xlsx"
+    assert canonical(f"{plain}/conti/", None) == f"{plain}/conti/"
+    # The page of the bucket in Cloudflare's dashboard, as the browser's address bar has it:
+    # account, jurisdiction ("default" for none) and bucket are all there; the tab shown is not a file.
+    page = f"https://dash.cloudflare.com/{ACCOUNT}/r2/default/buckets/case-private"
+    for pasted in (page, f"{page}/", f"{page}/settings", f"{page}/objects?prefix=conti%2F", f"{page}#top", page.replace(ACCOUNT, ACCOUNT.upper())):
+        assert canonical(pasted) == plain and canonical(pasted, "un-altro") == plain
+    assert canonical(f"https://dash.cloudflare.com/{ACCOUNT}/r2/eu/buckets/case-private/settings") == european
+    assert canonical(f"https://dash.cloudflare.com/{ACCOUNT}/r2/buckets/case-private") == plain  # as it once was
+    # Any other page of the dashboard still says which account it is.
+    for pasted in (f"https://dash.cloudflare.com/{ACCOUNT}/r2/overview", f"https://dash.cloudflare.com/{ACCOUNT}", f"dash.cloudflare.com/{ACCOUNT}/home"):
+        assert canonical(pasted, "case-private") == plain
+    # What comes out is an address every other function here takes as it is.
+    where = place(canonical(ACCOUNT, "case-private"))
+    assert (where.host, where.bucket, where.key) == (f"{ACCOUNT}.r2.cloudflarestorage.com", "case-private", "")
+    assert sibling(canonical(page), "santa.jpg") == f"{plain}/santa.jpg"
 
 
 def test_an_address_pasted_a_little_differently_is_still_understood():
@@ -199,9 +268,15 @@ def test_an_address_pasted_a_little_differently_is_still_understood():
     # Without its scheme, or with the quotes or brackets it was shown in.
     assert target(f"{ACCOUNT}.r2.cloudflarestorage.com/case-private/spese.xlsx") == plain
     assert target(f'"{plain}"') == plain and target(f"'{plain}'") == plain and target(f"<{plain}>") == plain
-    assert target(f"  {plain}\n") == plain
+    assert target(f"“{plain}”") == plain and target(f"`{plain}`") == plain and target(f"« {plain} »") == plain
+    assert target(f"  {plain}\n") == plain and target(f"\ufeff{plain}\u200b") == plain
+    # With the Account ID alone in place of the host.
+    assert target(f"{ACCOUNT}/case-private/spese.xlsx") == plain
     # With the bucket named before the host: the same place, said the other way.
     assert target(f"https://case-private.{ACCOUNT}.r2.cloudflarestorage.com/spese.xlsx") == plain
+    assert target(f"https://bucket-account.{ACCOUNT}.r2.cloudflarestorage.com/nome.xlsx") == (
+        f"https://{ACCOUNT}.r2.cloudflarestorage.com/bucket-account/nome.xlsx"
+    )  # words of the instructions, here the bucket's and the file's own names
     assert target(f"https://case-private.{ACCOUNT}.eu.r2.cloudflarestorage.com/conti/spese.xlsx") == (
         f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com/case-private/conti/spese.xlsx"
     )
@@ -217,26 +292,85 @@ def test_an_address_pasted_a_little_differently_is_still_understood():
     )
 
 
+def answer(status, code=None):
+    """What R2 sends back when it refuses: a status and, in the body, its own word for the refusal."""
+    body = b"<html>errore</html>" if code is None else (
+        f'<?xml version="1.0" encoding="UTF-8"?><Error><Code>{code}</Code>'
+        "<Message>The bucket case-private of account 0123456789abcdef does not hold Spese case.xlsx</Message>"
+        "<Key>Spese case.xlsx</Key><BucketName>case-private</BucketName></Error>"
+    ).encode("utf-8")
+    return FakeResponse(status, chunks=(body,))
+
+
+DENIED = "accesso negato: la chiave non può leggere questo bucket"
+UNKNOWN_KEY = "Access Key ID non riconosciuto da Cloudflare: incollato male, oppure token eliminato"
+UNKNOWN_KEYS = "chiavi non riconosciute da Cloudflare: incollate male, oppure token eliminato o scaduto"
+WRONG_SECRET = "firma rifiutata: la Secret Access Key non è quella di questo Access Key ID"
+REFUSED = "chiave rifiutata, oppure senza il permesso di lettura su questo bucket"
+NO_SUCH_BUCKET = "bucket non trovato: controlla il nome del bucket (per un bucket con giurisdizione europea l'host contiene «.eu.»)"
+NO_SUCH_FILE = "file non trovato: controlla il nome del bucket e del file in COSTS_R2_URL"
+
+
 @pytest.mark.parametrize(
-    "status, words",
+    "status, code, words",
     [
-        (401, "chiave rifiutata"),
-        (403, "chiave rifiutata"),
-        (404, "file non trovato"),
-        (301, "HTTP 301"),
-        (500, "HTTP 500"),
-        (206, "HTTP 206"),
+        # What R2 calls the refusal tells a wrong key from a key that may not read this bucket.
+        (403, "AccessDenied", DENIED),
+        (403, "SignatureDoesNotMatch", WRONG_SECRET),
+        (403, "InvalidAccessKeyId", UNKNOWN_KEY),
+        (401, "Unauthorized", UNKNOWN_KEYS),
+        (403, "ExpiredToken", "chiave scaduta: va creato un nuovo token"),
+        (403, "UnaParolaMaiVista", REFUSED),
+        (403, None, REFUSED),
+        (401, None, REFUSED),
+        (404, "NoSuchKey", NO_SUCH_FILE),
+        (404, None, NO_SUCH_FILE),
+        (404, "NoSuchBucket", NO_SUCH_BUCKET),
+        (301, "PermanentRedirect", "HTTP 301 (PermanentRedirect)"),
+        (400, "InvalidArgument", "HTTP 400 (InvalidArgument)"),
+        (503, "SlowDown", "HTTP 503 (SlowDown)"),
+        (500, "UnaParolaMaiVista", "HTTP 500"),
+        (500, None, "HTTP 500"),
+        (206, None, "HTTP 206"),
     ],
 )
-def test_a_refusal_is_explained_without_naming_bucket_file_or_key(status, words):
-    session = FakeSession(FakeResponse(status, chunks=(b"<Error><Code>AccessDenied</Code><Key>Spese case.xlsx</Key></Error>",)))
+def test_a_refusal_is_explained_without_naming_bucket_file_or_key(status, code, words):
+    session = FakeSession(answer(status, code))
     with pytest.raises(StorageError) as caught:
         fetch(URL, KEY_ID, SECRET, session=session, now=NOW)
     message = str(caught.value)
-    assert words in message
-    for private in ("0123456789abcdef", "case-private", "Spese", KEY_ID, SECRET, "AccessDenied"):
+    assert message == words or message.startswith(words + " (")
+    # Of R2's answer only its word for the refusal is ever repeated, and only one of the protocol's own.
+    for private in ("0123456789abcdef", "case-private", "Spese", KEY_ID, SECRET, "UnaParolaMaiVista", "Message", "does not hold"):
         assert private not in message
     assert session.response.closed
+
+
+def test_a_refusal_adds_what_looks_wrong_in_the_keys_by_their_shape_alone():
+    def refusal(key_id, secret, code="SignatureDoesNotMatch"):
+        with pytest.raises(StorageError) as caught:
+            fetch(URL, key_id, secret, session=FakeSession(answer(403, code)), now=NOW)
+        message = str(caught.value)
+        assert key_id.strip() not in message and secret.strip() not in message
+        return message
+
+    id_hint = "COSTS_R2_ACCESS_KEY_ID non ha la forma di un Access Key ID di R2 (32 caratteri esadecimali)"
+    secret_hint = (
+        "COSTS_R2_SECRET_ACCESS_KEY non ha la forma di una Secret Access Key di R2 "
+        "(64 caratteri esadecimali): non è il «Token value»"
+    )
+    # A pair of the right shape: nothing to add, whatever the refusal.
+    assert refusal(KEY_ID, SECRET) == WRONG_SECRET
+    assert refusal(f" {KEY_ID.upper()}\n", f"'{SECRET}'") == WRONG_SECRET
+    # The token's value pasted as the secret, as Cloudflare shows it first; a key cut short.
+    token_value = "AbCdEfGhIjKlMnOpQrStUvWxYz0123456789-_AB"
+    assert refusal(KEY_ID, token_value) == f"{WRONG_SECRET}. Nota: {secret_hint}"
+    assert refusal(KEY_ID[:-2], SECRET, "InvalidAccessKeyId") == f"{UNKNOWN_KEY}. Nota: {id_hint}"
+    assert refusal("la-mia-chiave", "il-mio-segreto", None) == f"{REFUSED}. Nota: {id_hint}; {secret_hint}"
+    # Each in the other's secret.
+    assert refusal(SECRET, KEY_ID) == f"{WRONG_SECRET}. Nota: le due chiavi sembrano scambiate tra i due secret"
+    # Only a refusal brings the note: a pair of another shape that R2 accepts is none of this module's business.
+    assert fetch(URL, "la-mia-chiave", "il-mio-segreto", session=FakeSession(), now=NOW) == b"PK\x03\x04..."
 
 
 def test_a_network_failure_is_reported_by_its_kind_only():
@@ -271,7 +405,13 @@ def test_a_missing_file_is_told_apart_from_a_refusal():
     # A house without a photo is not a failure: the caller has to know which of the two it is.
     with pytest.raises(NotFound):
         fetch(URL, KEY_ID, SECRET, session=FakeSession(FakeResponse(404)), now=NOW)
+    with pytest.raises(NotFound):
+        fetch(URL, KEY_ID, SECRET, session=FakeSession(answer(404, "NoSuchKey")), now=NOW)
     assert issubclass(NotFound, StorageError)
+    # A bucket that is not there is no missing photo: nothing could be found in it.
+    with pytest.raises(StorageError) as caught:
+        fetch(URL, KEY_ID, SECRET, session=FakeSession(answer(404, "NoSuchBucket")), now=NOW)
+    assert not isinstance(caught.value, NotFound) and "bucket non trovato" in str(caught.value)
     for status in (401, 403, 500):
         with pytest.raises(StorageError) as caught:
             fetch(URL, KEY_ID, SECRET, session=FakeSession(FakeResponse(status)), now=NOW)
@@ -301,12 +441,13 @@ def test_an_address_points_to_a_bucket_a_folder_or_a_file():
         where = place(url)
         assert (where.host, where.bucket, where.key) == (f"{ACCOUNT}.r2.cloudflarestorage.com", "case-private", key)
         assert (where.names_a_file, where.folder) == (is_file, folder)
-    with pytest.raises(StorageError, match="dopo l'host manca il nome del bucket"):
+    with pytest.raises(StorageError, match="manca il nome del bucket"):
         place(base)
+    assert place(base, "case-private") == place(f"{base}/case-private")
 
 
 def test_a_file_kept_beside_another_has_the_same_bucket_and_folder():
-    base = "https://acc.r2.cloudflarestorage.com"
+    base = API
     assert sibling(f"{base}/case-private/Spese case.xlsx", "santa.jpg") == f"{base}/case-private/santa.jpg"
     assert sibling(f"{base}/b/conti/2026/spese.xlsx", "vassena.jpg") == f"{base}/b/conti/2026/vassena.jpg"
     assert sibling(f"{base}/b/Cartella con spazi/spese.xlsx", "santa.jpg") == f"{base}/b/Cartella%20con%20spazi/santa.jpg"
@@ -316,7 +457,9 @@ def test_a_file_kept_beside_another_has_the_same_bucket_and_folder():
     assert sibling(f"{base}/case-private/conti/", "santa.jpg") == f"{base}/case-private/conti/santa.jpg"
     # The name is one file's, whatever it contains: it cannot step out of the folder.
     assert sibling(f"{base}/b/conti/spese.xlsx", "../altro/x.jpg") == f"{base}/b/conti/..%2Faltro%2Fx.jpg"
-    assert sibling(f" https://ACC.eu.r2.cloudflarestorage.com/b/spese.xlsx ", "casa mia.jpg") == "https://acc.eu.r2.cloudflarestorage.com/b/casa%20mia.jpg"
+    assert sibling(f" https://{ACCOUNT.upper()}.eu.r2.cloudflarestorage.com/b/spese.xlsx ", "casa mia.jpg") == (
+        f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com/b/casa%20mia.jpg"
+    )
     # What it makes is an address the fetch accepts.
     session = FakeSession()
     fetch(sibling(URL, "santa.jpg"), KEY_ID, SECRET, session=session, now=NOW)
@@ -395,9 +538,10 @@ def test_a_listing_that_cannot_be_trusted_is_refused_in_words_that_name_nothing(
     # Nothing that would make the reader expand or fetch anything.
     bomb = b'<?xml version="1.0"?><!DOCTYPE x [<!ENTITY a "aaaa">]><ListBucketResult><Contents><Key>&a;</Key></Contents></ListBucketResult>'
     assert str(refusal(FakeResponse(chunks=(bomb,)))) == "risposta di Cloudflare R2 non riconosciuta"
-    assert "chiave rifiutata" in str(refusal(FakeResponse(403)))
+    assert str(refusal(FakeResponse(403))) == REFUSED
+    assert str(refusal(answer(403, "AccessDenied"))).startswith(DENIED)
     assert str(refusal(FakeResponse(500))) == "HTTP 500"
-    missing = refusal(FakeResponse(404))
-    assert isinstance(missing, NotFound) and "bucket non trovato" in str(missing) and "«.eu.»" in str(missing)
+    for missing in (refusal(FakeResponse(404)), refusal(answer(404, "NoSuchBucket"))):
+        assert str(missing) == NO_SUCH_BUCKET
     endless = FakeResponse(chunks=(b"x" * (1024 * 1024),) * 3)
     assert "troppo grande" in str(refusal(endless))
