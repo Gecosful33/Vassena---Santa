@@ -10,7 +10,7 @@ from PIL import ExifTags, Image, ImageCms
 from casecal import photos
 from casecal.photos import BUDGET_BYTES, LONGEST_SIDE, MIME, Photo, PhotoError, photos_from_payload, prepare
 
-UNREADABLE = "il file non è un'immagine leggibile (JPEG, PNG o WebP)"
+EMPTY = "il file è vuoto (0 byte): il caricamento nel bucket non è riuscito, va caricato di nuovo"
 
 
 def drawn(size=(1200, 800), colours=((200, 60, 40), (40, 90, 200)), mode="RGB") -> Image.Image:
@@ -155,25 +155,83 @@ def test_a_picture_too_intricate_for_its_budget_is_made_smaller_not_refused():
     assert made.width < LONGEST_SIDE and abs(made.width / made.height - 1.5) < 0.02  # smaller, same shape
 
 
+ERROR_PAGE = b'<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Key>villa al lago.jpg</Key></Error>'
+
+
 @pytest.mark.parametrize(
-    "junk",
+    "junk, reason",
     [
-        b"",
-        b"non sono una foto",
-        b"PK\x03\x04" + b"\x00" * 64,                    # a workbook put under the wrong name
-        saved(drawn(), "GIF"),
-        saved(drawn(), "BMP"),
-        saved(drawn(), "TIFF"),
-        saved(drawn((2000, 1500)), quality=95)[:4000],   # a transfer cut short
-        b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + b"\x00" * 64,  # HEIC, as an iPhone may send it
+        # An upload that left nothing behind: the name is in the bucket, the photo is not.
+        (b"", EMPTY),
+        (b"non sono una foto", "il file non è un'immagine leggibile (JPEG, PNG o WebP; è di 17 byte)"),
+        (b"\x00" * 3000, "il file non è un'immagine leggibile (JPEG, PNG o WebP; è di 3 KB)"),
+        # A workbook put under the wrong name; a page of errors saved in the photo's place.
+        (b"PK\x03\x04" + b"\x00" * 64, "il file non è un'immagine: è un archivio o un documento (68 byte)"),
+        (ERROR_PAGE, f"il file non è un'immagine: è un testo ({len(ERROR_PAGE)} byte)"),
+        (b"  {\"errore\": \"villa al lago\"}", "il file non è un'immagine: è un testo (29 byte)"),
+        (b"%PDF-1.7\n" + b"\x00" * 2000, "il file non è un'immagine: è un PDF (2 KB)"),
+        (b"\x00\x00\x00\x14ftypqt  \x00\x00\x00\x00qt  " + b"\x00" * 3_000_000, "il file non è un'immagine: è un video (2,9 MB)"),
+        # Pictures, in a format the page is not made from.
+        (saved(drawn(), "GIF"), "il file è un'immagine GIF: servono JPEG, PNG o WebP"),
+        (saved(drawn(), "BMP"), "il file è un'immagine BMP: servono JPEG, PNG o WebP"),
+        (saved(drawn(), "TIFF"), "il file è un'immagine TIFF: servono JPEG, PNG o WebP"),
+        (saved(drawn(), "ICO"), "il file è un'immagine ICO: servono JPEG, PNG o WebP"),
+        # HEIC, as an iPhone keeps its photos and may send them, whatever the name says.
+        (b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + b"\x00" * 64,
+         "il file è in formato HEIC, quello delle foto di iPhone: va caricato come JPEG (88 byte)"),
+        (b"\x00\x00\x00\x18ftypmif1\x00\x00\x00\x00mif1heic" + b"\x00" * 2_500_000,
+         "il file è in formato HEIC, quello delle foto di iPhone: va caricato come JPEG (2,4 MB)"),
+        # A photo of a format the page takes, cut short on its way or spoiled.
+        (saved(drawn((2000, 1500)), quality=95)[:4000], "il file JPEG è danneggiato o incompleto (OSError, 4 KB): va caricato di nuovo"),
+        (saved(drawn((2000, 1500)), "PNG")[:700], "il file PNG è danneggiato o incompleto (OSError, 700 byte): va caricato di nuovo"),
+        (b"\xff\xd8\xff\xe0" + b"\x00" * 40, "il file JPEG è danneggiato o incompleto (UnidentifiedImageError, 44 byte): va caricato di nuovo"),
     ],
-    ids=["empty", "text", "zip", "gif", "bmp", "tiff", "truncated", "heic"],
+    ids=["empty", "text", "zeros", "zip", "error page", "json", "pdf", "video", "gif", "bmp", "tiff", "ico",
+         "heic", "heic whole", "jpeg cut short", "png cut short", "jpeg spoiled"],
 )
-def test_what_is_not_a_photo_is_refused_in_words_that_say_nothing_of_it(junk):
+def test_what_is_not_a_photo_is_refused_by_saying_what_the_file_is_and_nothing_of_what_is_in_it(junk, reason):
     with pytest.raises(PhotoError) as caught:
         prepare(junk)
-    assert str(caught.value) == UNREADABLE
+    assert str(caught.value) == reason
+    assert "villa" not in str(caught.value) and "lago" not in str(caught.value)
     assert caught.value.__cause__ is None  # nothing of the file in a traceback either
+
+
+def test_notes_of_the_camera_written_oddly_do_not_cost_the_photo():
+    # Only the way the phone was held is read from them; they are never written again.
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = 8
+    exif[ExifTags.Base.Make] = "ACME-CAMERA"
+    source = saved(drawn((800, 400)), exif=exif)
+    marker = source.index(b"ACME-CAMERA")
+    # The same file with its notes spoiled past the point where the orientation is read.
+    spoiled = source[:marker] + b"\xff" * 11 + source[marker + 11:]
+    for raw in (source, spoiled):
+        made = opened(prepare(raw, 0))
+        assert made.size == (400, 267) and near(made.getpixel((200, 20)), (40, 90, 200))  # a quarter turn the other way
+    # Notes that say nothing readable at all: the picture is taken as it is stored.
+    no_notes = saved(drawn((800, 400)), exif=b"Exif\x00\x00" + b"\x00" * 40)
+    assert opened(prepare(no_notes)).size == (800, 400)
+    # An orientation no camera writes.
+    exif[ExifTags.Base.Orientation] = 42
+    assert opened(prepare(saved(drawn((800, 400)), exif=exif))).size == (800, 400)
+
+
+def test_a_phone_photo_with_a_second_picture_inside_is_read_as_its_first():
+    # What a phone saves for a photo with depth or brightness data: two pictures in one file,
+    # the notes of the camera, the profile of its screen. The page is made from the first.
+    exif = Image.Exif()
+    exif[ExifTags.Base.Orientation] = 6
+    profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    buffer = BytesIO()
+    drawn((1600, 800)).save(buffer, "MPO", save_all=True, append_images=[Image.new("L", (400, 200), 128)],
+                            exif=exif, icc_profile=profile, quality=90)
+    source = buffer.getvalue()
+    with Image.open(BytesIO(source)) as original:
+        assert original.format == "MPO" and original.n_frames == 2
+    made = opened(prepare(source, 0))
+    assert made.format == "WEBP" and made.size == (800, 533)
+    assert near(made.getpixel((400, 20)), (200, 60, 40)) and near(made.getpixel((400, 500)), (200, 60, 40))
 
 
 def test_a_file_beyond_reason_is_refused_before_it_is_decoded(monkeypatch):

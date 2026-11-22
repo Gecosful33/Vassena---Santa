@@ -545,7 +545,7 @@ def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published(
                          fetch=bucket({"santa.jpg": b"an .heic renamed", "vassena.jpg": picture()}))
     assert state.photos == {"santa": ONLINE["santa"], "vassena": prepare(picture())} and state.fresh == ["vassena"]
     assert state.warnings == [
-        "foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP)): santa; restano quelle già pubblicate"
+        "foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP; è di 16 byte)): santa; restano quelle già pubblicate"
     ]
 
     # Whatever else goes wrong must not stop the calendar, nor reach the public log in full.

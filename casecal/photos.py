@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Mapping
 
-from PIL import Image, ImageCms, ImageOps
+from PIL import ExifTags, Image, ImageCms
 
 MAX_SOURCE_BYTES = 20 * 1024 * 1024  # a phone's photo as it comes out of the phone
 MAX_SOURCE_PIXELS = 60_000_000
@@ -34,8 +34,81 @@ FILE_ENDINGS = (".jpg", ".jpeg", ".png", ".webp")
 _QUALITIES = (72, 64, 56, 48)
 
 
+# The ways a camera may have held the phone, as it notes them in the file, and the turn that undoes each.
+_TURNS = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT,
+    3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM,
+    5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270,
+    7: Image.Transpose.TRANSVERSE,
+    8: Image.Transpose.ROTATE_90,
+}
+# What the files a phone or a computer keeps begin with, for the words of a refusal.
+_HEIC_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"mif1", b"msf1"}
+_OTHER_PICTURES = {"AVIF", "GIF", "TIFF", "BMP"}
+ACCEPTED = "JPEG, PNG o WebP"
+
+
 class PhotoError(ValueError):
     """The file cannot be made into a photo for the page. The message is safe for a public log."""
+
+
+def _size(count: int) -> str:
+    """How big a file is, in round figures."""
+    if count < 1024:
+        return f"{count} byte"
+    if count < 1024 * 1024:
+        return f"{round(count / 1024)} KB"
+    return f"{count / (1024 * 1024):.1f} MB".replace(".", ",")
+
+
+def _kind(raw: bytes) -> str:
+    """What a file is, told by the way it begins; "" if that says nothing."""
+    head = raw[:32]
+    if head.startswith(b"\xff\xd8\xff"):
+        return "JPEG"
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "PNG"
+    if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        return "WebP"
+    if head[4:8] == b"ftyp":
+        brand = head[8:12]
+        return "HEIC" if brand in _HEIC_BRANDS else "AVIF" if brand in (b"avif", b"avis") else "un video"
+    if head.startswith((b"GIF87a", b"GIF89a")):
+        return "GIF"
+    if head.startswith((b"II*\x00", b"MM\x00*")):
+        return "TIFF"
+    if head.startswith(b"BM"):
+        return "BMP"
+    if head.startswith(b"%PDF"):
+        return "un PDF"
+    if head.startswith(b"PK\x03\x04"):
+        return "un archivio o un documento"
+    if head.lstrip(b"\xef\xbb\xbf \t\r\n").startswith((b"<", b"{")):
+        return "un testo"  # a page of errors saved in the photo's place, most likely
+    return ""
+
+
+def _refusal(raw: bytes, named: str = "", fault: BaseException | None = None) -> PhotoError:
+    """Why a file is no photo for the page, said by what the file is: never by anything it shows.
+
+    ``named`` is the format the decoder took the file for, when it opened it;
+    ``fault`` is what stopped the decoding of a file of an accepted format.
+    """
+    kind, size = _kind(raw) or named, _size(len(raw))
+    if not raw:
+        return PhotoError("il file è vuoto (0 byte): il caricamento nel bucket non è riuscito, va caricato di nuovo")
+    if kind in ("JPEG", "MPO", "PNG", "WebP", "WEBP"):
+        why = f"{type(fault).__name__}, " if fault is not None else ""
+        return PhotoError(f"il file {kind} è danneggiato o incompleto ({why}{size}): va caricato di nuovo")
+    if kind == "HEIC":
+        return PhotoError(f"il file è in formato HEIC, quello delle foto di iPhone: va caricato come JPEG ({size})")
+    if kind in _OTHER_PICTURES or (kind and kind == named):
+        return PhotoError(f"il file è un'immagine {kind}: servono {ACCEPTED}")
+    if kind:
+        return PhotoError(f"il file non è un'immagine: è {kind} ({size})")
+    return PhotoError(f"il file non è un'immagine leggibile ({ACCEPTED}; è di {size})")
 
 
 @dataclass(frozen=True)
@@ -108,27 +181,42 @@ def _framed(image: Image.Image, focus: int) -> Image.Image:
     return image.crop((0, top, width, top + band))
 
 
+def _upright(source: Image.Image) -> Image.Image:
+    """The picture as the phone shows it: turned the way the camera noted when it was taken.
+
+    Only that one note is read. The rest of what the camera wrote is neither
+    looked at nor rewritten: none of it is kept, and a note written oddly
+    must not cost the photo.
+    """
+    try:
+        held = source.getexif().get(ExifTags.Base.Orientation, 1)
+    except Exception:  # noqa: BLE001 - notes that cannot be read say nothing
+        held = 1
+    source.load()
+    turn = _TURNS.get(held)
+    return source.transpose(turn) if turn is not None else source.copy()
+
+
 def prepare(raw: bytes, focus: int = 50) -> Photo:
     """The picture the page shows, made from a photo as its owner saved it.
 
     ``focus`` is where to cut around, for a photo taller than the page shows
     (see ``_framed``). Raises ``PhotoError`` for a file that is not a photo or
-    is beyond reason.
+    is beyond reason, saying what the file is instead.
     """
     if len(raw) > MAX_SOURCE_BYTES:
         raise PhotoError(f"file troppo grande (oltre {MAX_SOURCE_BYTES // (1024 * 1024)} MB)")
-    unreadable = "il file non è un'immagine leggibile (JPEG, PNG o WebP)"
     try:
         source = Image.open(BytesIO(raw))
-    except Exception:  # noqa: BLE001 - whatever the library makes of a file that is not an image
-        raise PhotoError(unreadable) from None
+    except Exception as exc:  # noqa: BLE001 - whatever the library makes of a file that is not an image
+        raise _refusal(raw, fault=exc) from None
     with source:
         if source.format not in _SOURCE_FORMATS:
-            raise PhotoError(unreadable)
+            raise _refusal(raw, named=str(source.format or ""))
         if source.width * source.height > MAX_SOURCE_PIXELS:
             raise PhotoError(f"immagine troppo grande (oltre {MAX_SOURCE_PIXELS // 1_000_000} megapixel)")
         try:
-            image = ImageOps.exif_transpose(source)  # upright, as the phone shows it
+            image = _upright(source)
             if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
                 image = image.convert("RGBA")
                 backdrop = Image.new("RGBA", image.size, "white")
@@ -136,8 +224,8 @@ def prepare(raw: bytes, focus: int = 50) -> Photo:
             if image.mode not in ("RGB", "RGBA", "L", "CMYK"):
                 image = image.convert("RGB")
             image = _to_srgb(image).convert("RGB")
-        except Exception:  # noqa: BLE001 - a file cut short, or one the decoder gives up on
-            raise PhotoError(unreadable) from None
+        except Exception as exc:  # noqa: BLE001 - a file cut short, or one the decoder gives up on
+            raise _refusal(raw, named=str(source.format or ""), fault=exc) from None
 
     image = _framed(image, focus)
     image.thumbnail((LONGEST_SIDE, LONGEST_SIDE), Image.LANCZOS)
