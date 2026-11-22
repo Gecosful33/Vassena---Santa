@@ -19,15 +19,24 @@ check_out = "11:00"
 # Nota facoltativa mostrata in fondo alla pagina (finisce cifrata, ma qui è in chiaro).
 # note = "Per usare una casa scrivi nel gruppo di famiglia."
 
+# Foto di una casa (facoltativa, vedi README): sta nel bucket privato, mai qui. Di norma
+# è il file `<id>.jpg`; se ha un altro nome lo dice `photo`. Una foto verticale viene
+# tagliata in orizzontale attorno al punto indicato da `photo_focus`, in percentuale
+# dall'alto (50 = a metà).
+
 [[property]]
 id = "santa"
 label = "Santa"
 env = "SANTA"      # secret: SANTA_KB_URL, SANTA_KB_USER, SANTA_KB_PASS
+photo = "IMG_2835.jpeg"
+photo_focus = 48
 
 [[property]]
 id = "vassena"
 label = "Vassena"
 env = "VASSENA"    # secret: VASSENA_KB_URL, VASSENA_KB_USER, VASSENA_KB_PASS
+photo = "aa1fb57d-0be3-4614-979a-58d019f97e33.jpeg"
+photo_focus = 26   # la casa è nella parte alta della foto
 # Le prenotazioni che il portale riporta con tutti gli importi a zero sono soggiorni
 # nostri inseriti dal gestore, non ospiti: nel calendario valgono come date bloccate.
 unpaid_is_own_use = true

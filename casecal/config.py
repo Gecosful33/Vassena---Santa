@@ -54,6 +54,11 @@ class PropertyConfig:
     # A booking the portal lists with every amount at zero is the owners' own stay,
     # entered by the manager: it is shown as blocked dates, not as guests.
     unpaid_is_own_use: bool = False
+    # The house's photo in the private bucket: the name of its file, where it is not
+    # "<id>.jpg", and how far down the picture (percent from the top) the part to keep
+    # in view is, for a photo that has to be cut to the page's shape.
+    photo: str | None = None
+    photo_focus: int = 50
 
     def secret_names(self) -> tuple[str, str, str]:
         return (f"{self.env}_KB_URL", f"{self.env}_KB_USER", f"{self.env}_KB_PASS")
@@ -94,6 +99,17 @@ def _house_hours(path, where: str, entry: Mapping, check_in: str, check_out: str
     return check_in, check_out
 
 
+def _photo(path, where: str, entry: Mapping) -> tuple[str | None, int]:
+    """The name of the house's photo in the bucket, if it has one of its own, and where to cut around."""
+    name = entry.get("photo")
+    if name is not None and (not isinstance(name, str) or not name.strip() or "/" in name or len(name) > 200):
+        raise ConfigError(f"{path}: {where}photo deve essere il nome di un file del bucket, senza cartelle")
+    focus = entry.get("photo_focus", 50)
+    if isinstance(focus, bool) or not isinstance(focus, int) or not 0 <= focus <= 100:
+        raise ConfigError(f"{path}: {where}photo_focus deve essere un numero intero tra 0 (in alto) e 100 (in basso)")
+    return (name.strip() if name else None), focus
+
+
 def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
     try:
         raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
@@ -114,7 +130,10 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
         own_use = entry.get("unpaid_is_own_use", False)
         if not isinstance(own_use, bool):
             raise ConfigError(f"{path}: [[property]] {identity['id']}: unpaid_is_own_use deve essere true o false")
-        prop = PropertyConfig(**identity, check_in=hours[0], check_out=hours[1], unpaid_is_own_use=own_use)
+        photo, focus = _photo(path, f"[[property]] {identity['id']}: ", entry)
+        prop = PropertyConfig(
+            **identity, check_in=hours[0], check_out=hours[1], unpaid_is_own_use=own_use, photo=photo, photo_focus=focus
+        )
         if not _ID_RE.match(prop.id):
             raise ConfigError(f"{path}: id non valido {prop.id!r} (minuscole, cifre, trattini)")
         if not _ENV_RE.match(prop.env):

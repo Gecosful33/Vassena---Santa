@@ -44,18 +44,56 @@ def test_a_photo_becomes_a_small_webp_of_the_same_shape():
     assert near(made.getpixel((10, 10)), (200, 60, 40)) and near(made.getpixel((made.width - 10, 10)), (40, 90, 200))
     # A picture already small is not blown up.
     assert opened(prepare(saved(drawn((300, 200))))).size == (300, 200)
-    # Upright pictures are limited on their height.
-    assert opened(prepare(saved(drawn((1500, 2000))))).size == (LONGEST_SIDE * 3 // 4, LONGEST_SIDE)
+    # One wider than the page shows keeps its shape: the page crops its sides itself.
+    assert opened(prepare(saved(drawn((2400, 800))))).size == (LONGEST_SIDE, LONGEST_SIDE // 3)
+
+
+def striped(size=(600, 1200)) -> Image.Image:
+    """An upright picture in three bands: red at the top, green in the middle, blue at the bottom."""
+    image = Image.new("RGB", size, (200, 40, 40))
+    third = size[1] // 3
+    image.paste((40, 160, 60), (0, third, size[0], 2 * third))
+    image.paste((40, 60, 200), (0, 2 * third, size[0], size[1]))
+    return image
+
+
+def test_an_upright_photo_is_cut_to_the_pages_shape_around_its_subject():
+    red, green, blue = (200, 40, 40), (40, 160, 60), (40, 60, 200)
+    source = saved(striped(), "PNG")
+
+    def cut(focus):
+        made = opened(prepare(source, focus))
+        assert made.size == (600, 400)  # three to two, as wide as it was
+        return made.getpixel((300, 10)), made.getpixel((300, 390))
+
+    # Around the middle unless told otherwise; around the point given, in percent from the top.
+    assert all(near(pixel, green) for pixel in cut(50))
+    assert prepare(source) == prepare(source, 50)
+    top, bottom = cut(26)
+    assert near(top, red) and near(bottom, green)
+    top, bottom = cut(74)
+    assert near(top, green) and near(bottom, blue)
+    # Never beyond the picture's own edges.
+    assert all(near(pixel, red) for pixel in cut(0)) and all(near(pixel, red) for pixel in cut(5))
+    assert all(near(pixel, blue) for pixel in cut(100))
+    # The cut comes before the reduction: a big upright photo ends as large as a landscape one.
+    assert opened(prepare(saved(striped((1500, 2000))))).size == (LONGEST_SIDE, 560)
+    # A photo no taller than that shape is left as it is, wherever its subject is said to be.
+    assert opened(prepare(saved(drawn((900, 600))), 10)).size == (LONGEST_SIDE, 560)
+    assert opened(prepare(saved(drawn((800, 400))), 90)).size == (800, 400)
 
 
 def test_a_photo_taken_with_the_phone_on_its_side_comes_out_upright():
     # The camera stores the sensor's picture and a note on how to turn it: 6 = a quarter turn clockwise.
     exif = Image.Exif()
     exif[ExifTags.Base.Orientation] = 6
-    made = opened(prepare(saved(drawn((800, 400)), exif=exif)))
-    assert made.size == (400, 800)
-    # What was the left half is now the top half.
-    assert near(made.getpixel((200, 100)), (200, 60, 40)) and near(made.getpixel((200, 700)), (40, 90, 200))
+    source = saved(drawn((800, 400)), exif=exif)
+    # Turned, it is 400 wide and 800 tall, and what was the left half is now the top half:
+    # cut around its top it is all of the first colour, around its bottom all of the second.
+    top, bottom = opened(prepare(source, 0)), opened(prepare(source, 100))
+    assert top.size == bottom.size == (400, 267)
+    assert near(top.getpixel((200, 20)), (200, 60, 40)) and near(top.getpixel((200, 250)), (200, 60, 40))
+    assert near(bottom.getpixel((200, 20)), (40, 90, 200)) and near(bottom.getpixel((200, 250)), (40, 90, 200))
 
 
 def test_nothing_the_camera_wrote_about_the_photo_is_kept():
