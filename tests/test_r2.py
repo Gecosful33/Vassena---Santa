@@ -9,11 +9,13 @@ from casecal import r2
 from casecal.r2 import (
     EMPTY_SHA256,
     MAX_BYTES,
+    Entry,
     NotFound,
     StorageError,
     authorization,
     canonical,
     canonical_query,
+    entries,
     fetch,
     names,
     place,
@@ -502,6 +504,33 @@ def test_the_files_of_a_bucket_are_asked_for_with_a_signed_get():
         "GET", host, "/case-private", {}, key_id=KEY_ID, secret=SECRET, when=NOW, query=query
     )
     assert session.response.closed
+
+
+def test_a_listing_says_how_big_each_file_is_and_when_it_was_written():
+    # A name with nothing under it, as a failed upload leaves it, is told apart from a file.
+    body = (
+        '<?xml version="1.0" encoding="UTF-8"?><ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">'
+        "<Name>case-private</Name><IsTruncated>false</IsTruncated>"
+        "<Contents><Key>spese.xlsx</Key><LastModified>2026-11-21T19:40:02.118Z</LastModified><Size>14559</Size></Contents>"
+        "<Contents><Key>IMG_0001.jpeg</Key><LastModified>2026-11-22T09:41:10.000Z</LastModified><Size>0</Size></Contents>"
+        "<Contents><Size>350355</Size><Key>vassena.jpg</Key><LastModified> 2026-11-22T12:01:33.500Z </LastModified></Contents>"
+        "<Contents><Key>senza misura.png</Key></Contents><Contents><Key>strano.png</Key><Size>molti</Size></Contents>"
+        "</ListBucketResult>"
+    ).encode("utf-8")
+    found = entries(BUCKET, KEY_ID, SECRET, session=FakeSession(FakeResponse(chunks=(body,))), now=NOW)
+    assert found == [
+        Entry("spese.xlsx", 14559, "2026-11-21T19:40:02.118Z"),
+        Entry("IMG_0001.jpeg", 0, "2026-11-22T09:41:10.000Z"),
+        Entry("vassena.jpg", 350355, "2026-11-22T12:01:33.500Z"),
+        Entry("senza misura.png", -1, ""),   # what the listing does not say is left unsaid
+        Entry("strano.png", -1, ""),
+    ]
+    # The dates, as R2 writes them, are in order of time when sorted as text.
+    assert sorted(found[:3], key=lambda entry: entry.modified)[-1].name == "vassena.jpg"
+    # The names alone are the same listing, asked for in the same way.
+    session = FakeSession(FakeResponse(chunks=(body,)))
+    assert names(BUCKET, KEY_ID, SECRET, session=session, now=NOW) == [entry.name for entry in found]
+    assert len(session.calls) == 1
 
 
 def test_the_files_listed_are_those_of_the_folder_pointed_at_and_no_deeper():

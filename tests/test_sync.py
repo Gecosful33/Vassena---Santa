@@ -422,9 +422,9 @@ def test_the_account_alone_is_enough_when_the_configuration_names_the_bucket():
         assert listed == [folder] and asked == [f"{folder}/Spese%20case.xlsx"]
         # The photos are looked for in the same place.
         held = bucket({"santa.jpg": picture(), "vassena.png": picture((600, 400), "PNG")})
-        photos = photos_state(named, **{**BUCKET, "url": pasted}, load_previous=no_previous, fetch=held)
-        assert photos.fresh == ["santa", "vassena"] and photos.warnings == []
-        assert {url.rsplit("/", 1)[0] for url, *_ in held.asked} == {folder}
+        found = photos_state(named, **{**BUCKET, "url": pasted}, load_previous=no_previous, fetch=held, listing=held.listing)
+        assert found.fresh == ["santa", "vassena"] and found.warnings == []
+        assert [url for url, *_ in held.listed] == [folder] and {url.rsplit("/", 1)[0] for url, *_ in held.asked} == {folder}
 
     # Without a bucket in the configuration the account alone does not say where to look.
     state = costs_state(CONFIG, **{**BUCKET, "url": ACCOUNT}, load_previous=published_with_costs, fetch=never_fetched, listing=never_fetched)
@@ -438,9 +438,10 @@ def test_an_address_left_with_its_blanks_is_said_to_be_so_for_costs_and_photos_a
     state = costs_state(named, **{**BUCKET, "url": pasted}, load_previous=published_with_costs, fetch=never_fetched, listing=never_fetched)
     assert state.sheets == [COSTS] and not state.fresh
     assert state.warnings == [f"spese non lette ({reason}): restano quelle già pubblicate"]
-    photos = photos_state(named, **{**BUCKET, "url": pasted}, load_previous=published_with_photos, fetch=never_fetched)
-    assert photos.photos == ONLINE and photos.fresh == [] and photos.absent == []
-    assert photos.warnings == [f"foto non lette ({reason}): santa, vassena; restano quelle già pubblicate"]
+    found = photos_state(named, **{**BUCKET, "url": pasted}, load_previous=published_with_photos,
+                         fetch=never_fetched, listing=never_fetched)
+    assert found.photos == ONLINE and found.fresh == [] and found.absent == []
+    assert found.warnings == [f"foto non lette ({reason}): santa, vassena; restano quelle già pubblicate"]
 
 
 def test_the_bucket_is_read_through_the_signed_fetch_unless_told_otherwise(monkeypatch):
@@ -474,9 +475,12 @@ def published_with_photos() -> PreviousPage:
     return PreviousPage(photos=dict(ONLINE))
 
 
-def bucket(files):
-    """A stand-in for the bucket: ``files`` maps a file name to its bytes, or to the error asking for it raises."""
-    asked = []
+def bucket(files, written=None):
+    """A stand-in for the bucket: ``files`` maps a file name to its bytes, or to the error asking for it raises.
+
+    ``written`` says when the files it names were last uploaded, as the listing shows it.
+    """
+    asked, listed = [], []
 
     def fetch(url, key_id, secret, *, max_bytes):
         asked.append((url, key_id, secret, max_bytes))
@@ -485,23 +489,43 @@ def bucket(files):
             raise held
         return held
 
-    fetch.asked = asked
+    def listing(url, key_id, secret):
+        listed.append((url, key_id, secret))
+        return [
+            r2.Entry(name, len(held) if isinstance(held, bytes) else 1234, (written or {}).get(name, "2026-11-22T08:00:00.000Z"))
+            for name, held in files.items()
+        ]
+
+    fetch.asked, fetch.listing, fetch.listed = asked, listing, listed
     return fetch
 
 
+def photos(config, fetch, *, previous=no_previous, **place):
+    """What the job makes of the photos in the bucket ``fetch`` stands in for."""
+    return photos_state(config, **{**BUCKET, **place}, load_previous=previous, fetch=fetch, listing=fetch.listing)
+
+
+def fetched(fetch):
+    """The names of the files that were asked for, in order."""
+    return [unquote(url.rsplit("/", 1)[1]) for url, *_ in fetch.asked]
+
+
 def test_without_the_buckets_settings_there_are_no_photos_and_nothing_to_report():
-    state = photos_state(CONFIG, url=None, key_id=None, secret=None, load_previous=no_previous, fetch=never_fetched)
+    state = photos_state(CONFIG, url=None, key_id=None, secret=None, load_previous=no_previous,
+                         fetch=never_fetched, listing=never_fetched)
     assert state == PhotosState({}, [], [])
 
 
 def test_each_house_has_the_photo_kept_under_its_name_beside_the_workbook():
-    fetch = bucket({"santa.jpg": picture((1600, 1200)), "vassena.jpg": picture((1200, 1600), "PNG")})
-    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
+    fetch = bucket({"spese.xlsx": b"PK...", "santa.jpg": picture((1600, 1200)), "vassena.jpg": picture((1200, 1600), "PNG")})
+    state = photos(CONFIG, fetch)
+    # The folder the workbook is in is listed once; then only the files that are the houses' photos are fetched.
+    assert fetch.listed == [(BUCKET["url"], BUCKET["key_id"], BUCKET["secret"])]
     assert fetch.asked == [
         (f"{FOLDER}/santa.jpg", BUCKET["key_id"], BUCKET["secret"], MAX_SOURCE_BYTES),
         (f"{FOLDER}/vassena.jpg", BUCKET["key_id"], BUCKET["secret"], MAX_SOURCE_BYTES),
     ]
-    assert state.fresh == ["santa", "vassena"] and state.warnings == []
+    assert state.fresh == ["santa", "vassena"] and state.warnings == [] and state.stray == 0
     assert state.photos == {"santa": prepare(picture((1600, 1200))), "vassena": prepare(picture((1200, 1600), "PNG"))}
     assert all(photo.mime == "image/webp" for photo in state.photos.values())
 
@@ -509,26 +533,55 @@ def test_each_house_has_the_photo_kept_under_its_name_beside_the_workbook():
 def test_a_house_without_a_photo_simply_has_none():
     fetch = bucket({"vassena.jpg": picture()})
     # Even if one was online: the owner took it away. No fault, so no warning; only a note of which house.
-    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
+    state = photos(CONFIG, fetch)
     assert set(state.photos) == {"vassena"} and state.fresh == ["vassena"] and state.warnings == []
     assert state.absent == ["santa"]
-    nothing = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=bucket({}))
+    nothing = photos(CONFIG, bucket({"spese.xlsx": b"PK...", "appunti.txt": b"..."}))
     assert nothing == PhotosState({}, [], [], ["santa", "vassena"])
 
 
 def test_a_photo_is_found_under_any_of_the_endings_a_photo_is_saved_with():
     # A phone says ".jpeg" as often as ".jpg"; a screenshot is a ".png".
-    fetch = bucket({"santa.jpeg": picture((900, 600)), "santa.png": picture((300, 200), "PNG"), "vassena.webp": picture((600, 400), "WEBP")})
-    state = photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=fetch)
-    assert [url.rsplit("/", 1)[1] for url, *_ in fetch.asked] == [
-        "santa.jpg", "santa.jpeg",                                    # the first one found is the photo
-        "vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp",
-    ]
+    fetch = bucket({"santa.png": picture((300, 200), "PNG"), "santa.jpeg": picture((900, 600)), "vassena.webp": picture((600, 400), "WEBP")})
+    state = photos(CONFIG, fetch)
+    assert fetched(fetch) == ["santa.jpeg", "vassena.webp"]  # of two with the house's name, the usual ending first
     assert state.photos == {"santa": prepare(picture((900, 600))), "vassena": prepare(picture((600, 400), "WEBP"))}
     assert state.fresh == ["santa", "vassena"] and state.absent == [] and state.warnings == []
-    # Other names are not looked for: capitals, or the name the phone gave the file.
-    other = bucket({"Santa.jpg": picture(), "IMG_0001.jpeg": picture()})
-    assert photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=other).absent == ["santa", "vassena"]
+
+
+def test_a_photo_is_known_by_the_house_its_name_begins_with():
+    # However the name is capitalised, and whatever follows the house's: a phone that saves a
+    # file a second time calls it "santa 2.jpg".
+    for name in ("Santa.jpg", "SANTA.JPEG", "santa 2.jpg", "santa-cucina.png", "Santa (1).webp", "santa_nuova.jpg"):
+        fetch = bucket({name: picture((900, 600), "PNG" if name.endswith("png") else "WEBP" if name.endswith("webp") else "JPEG")})
+        state = photos(CONFIG, fetch)
+        assert fetched(fetch) == [name] and state.fresh == ["santa"] and state.absent == ["vassena"], name
+    # The house's own name comes before those, and of those the last one uploaded comes first.
+    fetch = bucket(
+        {"santa 2.jpg": picture((300, 200)), "santa.jpg": picture((900, 600)), "santa 3.jpg": picture((600, 400)),
+         "vassena 2.jpg": picture((300, 200)), "vassena 3.jpg": picture((600, 400))},
+        written={"santa.jpg": "2026-11-01T08:00:00.000Z", "santa 2.jpg": "2026-11-21T08:00:00.000Z", "santa 3.jpg": "2026-11-22T09:00:00.000Z",
+                 "vassena 2.jpg": "2026-11-22T09:00:00.000Z", "vassena 3.jpg": "2026-11-21T08:00:00.000Z"},
+    )
+    state = photos(CONFIG, fetch)
+    assert fetched(fetch) == ["santa.jpg", "vassena 2.jpg"]
+    assert state.photos == {"santa": prepare(picture((900, 600))), "vassena": prepare(picture((300, 200)))}
+    # A name that only happens to start the same way is another word; one the phone gave says nothing
+    # of the house. Such pictures are counted, so that the log can say they are there: never named.
+    other = bucket({"santarosa.jpg": picture(), "IMG_0001.jpeg": picture(), "foto.HEIC": b"...", "spese.xlsx": b"PK...", "santa.txt": b"..."})
+    state = photos(CONFIG, other)
+    assert state.absent == ["santa", "vassena"] and other.asked == [] and state.stray == 3
+
+
+def test_of_two_houses_the_one_named_in_full_has_the_photo():
+    twins = replace(CONFIG, properties=(
+        PropertyConfig(id="santa", label="Santa", env="SANTA"),
+        PropertyConfig(id="santa-alta", label="Santa alta", env="ALTA"),
+    ))
+    fetch = bucket({"santa-alta.jpg": picture((900, 600)), "Santa-Alta 2.jpg": picture((300, 200)), "santa 2.jpg": picture((600, 400))})
+    state = photos(twins, fetch)
+    assert fetched(fetch) == ["santa 2.jpg", "santa-alta.jpg"]
+    assert state.photos == {"santa": prepare(picture((600, 400))), "santa-alta": prepare(picture((900, 600)))}
 
 
 def test_a_name_left_empty_by_a_failed_upload_is_passed_over_for_the_next_one():
@@ -536,28 +589,51 @@ def test_a_name_left_empty_by_a_failed_upload_is_passed_over_for_the_next_one():
     # uploaded again under the house's own name. The empty one need not be removed first.
     named = replace(CONFIG, properties=(replace(CONFIG.properties[0], photo="IMG_0001.jpeg"), *CONFIG.properties[1:]))
     fetch = bucket({"IMG_0001.jpeg": b"", "santa.jpg": b"", "santa.jpeg": picture((900, 600)), "vassena.jpg": picture()})
-    state = photos_state(named, **BUCKET, load_previous=no_previous, fetch=fetch)
-    assert [unquote(url.rsplit("/", 1)[1]) for url, *_ in fetch.asked] == ["IMG_0001.jpeg", "santa.jpg", "santa.jpeg", "vassena.jpg"]
+    state = photos(named, fetch)
+    assert fetched(fetch) == ["santa.jpeg", "vassena.jpg"]  # the listing says which are empty: they are not even asked for
     assert state.photos == {"santa": prepare(picture((900, 600))), "vassena": prepare(picture())}
     assert state.fresh == ["santa", "vassena"] and state.warnings == [] and state.absent == []
 
-    # With no other name holding the photo, the empty file is what there is, and is said to be so.
-    fetch = bucket({"IMG_0001.jpeg": b"", "vassena.jpg": b""})
-    state = photos_state(named, **BUCKET, load_previous=published_with_photos, fetch=fetch)
-    assert state.photos == ONLINE and state.fresh == [] and state.absent == []
+    # With no other file holding the photo, the empty ones are what there is, and are said to be so.
+    fetch = bucket({"IMG_0001.jpeg": b"", "vassena.jpg": b"", "Vassena 2.jpg": b""})
+    state = photos(named, fetch, previous=published_with_photos)
+    assert state.photos == ONLINE and state.fresh == [] and state.absent == [] and fetch.asked == []
     assert state.warnings == [
         "foto non lette (il file è vuoto (0 byte): il caricamento nel bucket non è riuscito, va caricato di nuovo): "
-        "santa, vassena; restano quelle già pubblicate"
+        "santa; restano quelle già pubblicate",
+        "foto non lette (i 2 file con il nome della casa sono tutti vuoti (0 byte): "
+        "il caricamento nel bucket non è riuscito, vanno caricati di nuovo): vassena; restano quelle già pubblicate",
     ]
-    assert [unquote(url.rsplit("/", 1)[1]) for url, *_ in fetch.asked] == [
-        "IMG_0001.jpeg", "santa.jpg", "santa.jpeg", "santa.png", "santa.webp",   # every name is tried before giving up
-        "vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp",
+    # A listing that does not say how big a file is leaves it to the file itself.
+    unsized = bucket({"santa.jpg": b""})
+    unsized.listing = lambda url, key_id, secret: [r2.Entry("santa.jpg")]
+    state = photos(CONFIG, unsized, previous=published_with_photos)
+    assert fetched(unsized) == ["santa.jpg"] and "il file è vuoto (0 byte)" in state.warnings[0]
+
+
+def test_a_file_that_is_no_photo_is_passed_over_for_the_next_one_too():
+    # An iPhone's photo uploaded as it is, then again as a JPEG: the second is the photo.
+    heic = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + b"\x00" * 64
+    fetch = bucket({"santa.jpg": heic, "santa 2.jpg": picture((900, 600)), "vassena.heic": heic})
+    state = photos(CONFIG, fetch, previous=published_with_photos)
+    assert fetched(fetch) == ["santa.jpg", "santa 2.jpg", "vassena.heic"]
+    assert state.photos == {"santa": prepare(picture((900, 600))), "vassena": ONLINE["vassena"]} and state.fresh == ["santa"]
+    # A photo kept in a format that is not read is still the house's photo: said to be of the wrong kind, not missing.
+    assert state.absent == [] and state.warnings == [
+        "foto non lette (il file è in formato HEIC, quello delle foto di iPhone: va caricato come JPEG (88 byte)): "
+        "vassena; restano quelle già pubblicate"
+    ]
+    # Of several that cannot be read, the fault told is that of the likeliest file.
+    fetch = bucket({"santa.jpg": b"an .heic renamed", "santa 2.jpg": heic})
+    state = photos(CONFIG, fetch, previous=published_with_photos)
+    assert state.warnings == [
+        "foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP; è di 16 byte)): santa; restano quelle già pubblicate"
     ]
 
 
 def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published():
     refused = r2.StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
-    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos, fetch=bucket({"santa.jpg": refused, "vassena.jpg": refused}))
+    state = photos(CONFIG, bucket({"santa.jpg": refused, "vassena.jpg": refused}), previous=published_with_photos)
     assert state.photos == ONLINE and state.fresh == []
     assert state.warnings == [
         "foto non lette (chiave rifiutata, oppure senza il permesso di lettura su questo bucket): "
@@ -565,22 +641,48 @@ def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published(
     ]  # one cause, said once
 
     # One file is not a photo: the other house is read as usual.
-    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos,
-                         fetch=bucket({"santa.jpg": b"an .heic renamed", "vassena.jpg": picture()}))
+    state = photos(CONFIG, bucket({"santa.jpg": b"an .heic renamed", "vassena.jpg": picture()}), previous=published_with_photos)
     assert state.photos == {"santa": ONLINE["santa"], "vassena": prepare(picture())} and state.fresh == ["vassena"]
     assert state.warnings == [
         "foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP; è di 16 byte)): santa; restano quelle già pubblicate"
     ]
 
     # Whatever else goes wrong must not stop the calendar, nor reach the public log in full.
-    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos,
-                         fetch=bucket({"santa.jpg": RuntimeError(f"boom {BUCKET['secret']}"), "vassena.jpg": picture()}))
+    state = photos(CONFIG, bucket({"santa.jpg": RuntimeError(f"boom {BUCKET['secret']}"), "vassena.jpg": picture()}),
+                   previous=published_with_photos)
     assert state.photos["santa"] == ONLINE["santa"] and state.fresh == ["vassena"]
     assert state.warnings[0].startswith("foto non lette (RuntimeError (sync.py:") and BUCKET["secret"] not in state.warnings[0]
 
+    # A file removed between the listing and its fetch is as if it had never been there.
+    gone = bucket({"santa.jpg": r2.NotFound("file non trovato"), "vassena.jpg": picture()})
+    state = photos(CONFIG, gone, previous=published_with_photos)
+    assert state.absent == ["santa"] and state.fresh == ["vassena"] and state.warnings == []
+    # One too large to be a photo does not keep the next from being read.
+    huge = r2.StorageError("file troppo grande (oltre 20 MB)")
+    state = photos(CONFIG, bucket({"santa.jpg": huge, "santa 2.jpg": picture((900, 600))}), previous=published_with_photos)
+    assert state.photos["santa"] == prepare(picture((900, 600))) and state.warnings == []
+
     # With nothing published yet there is no picture to keep.
-    state = photos_state(CONFIG, **BUCKET, load_previous=PreviousPage, fetch=bucket({"santa.jpg": refused}))
+    state = photos(CONFIG, bucket({"santa.jpg": refused}), previous=PreviousPage)
     assert state.photos == {} and len(state.warnings) == 1
+
+
+def test_a_bucket_that_cannot_be_listed_keeps_every_photo_already_published():
+    def refused(url, key_id, secret):
+        raise r2.StorageError("accesso negato: la chiave non può leggere questo bucket")
+
+    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos, fetch=never_fetched, listing=refused)
+    assert state.photos == ONLINE and state.fresh == [] and state.absent == []
+    assert state.warnings == [
+        "foto non lette (accesso negato: la chiave non può leggere questo bucket): santa, vassena; restano quelle già pubblicate"
+    ]
+
+    def broken(url, key_id, secret):
+        raise RuntimeError(f"boom {BUCKET['secret']}")
+
+    state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos, fetch=never_fetched, listing=broken)
+    assert state.photos == ONLINE and state.warnings[0].startswith("foto non lette (RuntimeError (sync.py:")
+    assert BUCKET["secret"] not in state.warnings[0]
 
 
 def test_a_house_may_name_its_photo_and_say_where_its_subject_is():
@@ -595,15 +697,15 @@ def test_a_house_may_name_its_photo_and_say_where_its_subject_is():
     )
     upright = upright_picture()
     fetch = bucket({"IMG_0001.jpeg": picture(), "da whatsapp.jpeg": upright, "santa.jpg": picture((300, 200))})
-    state = photos_state(named, **{**BUCKET, "url": FOLDER}, load_previous=no_previous, fetch=fetch)  # the bucket's own address
+    state = photos(named, fetch, url=FOLDER)  # the bucket's own address
     assert [url.rsplit("/", 1)[1] for url, *_ in fetch.asked] == ["IMG_0001.jpeg", "da%20whatsapp.jpeg"]
     assert state.photos == {"santa": prepare(picture()), "vassena": prepare(upright, 20)}
     assert prepare(upright, 20) != prepare(upright)  # cut around the point the house says
-    assert state.fresh == ["santa", "vassena"] and state.warnings == []
+    assert state.fresh == ["santa", "vassena"] and state.warnings == [] and state.stray == 0
     # A named file that is no longer there falls back to the house's own name.
     fetch = bucket({"santa.jpg": picture((300, 200))})
-    state = photos_state(named, **BUCKET, load_previous=no_previous, fetch=fetch)
-    assert [url.rsplit("/", 1)[1] for url, *_ in fetch.asked][:2] == ["IMG_0001.jpeg", "santa.jpg"]
+    state = photos(named, fetch)
+    assert fetched(fetch) == ["santa.jpg"]
     assert state.photos == {"santa": prepare(picture((300, 200)))} and state.absent == ["vassena"]
 
 
@@ -611,16 +713,17 @@ def test_a_house_may_name_its_photo_and_say_where_its_subject_is():
 def test_an_incomplete_setting_leaves_the_photos_as_they_are(missing):
     # The costs, read with the same settings, have already said what is missing.
     settings = {**BUCKET, missing: None}
-    state = photos_state(CONFIG, **settings, load_previous=published_with_photos, fetch=never_fetched)
+    state = photos_state(CONFIG, **settings, load_previous=published_with_photos, fetch=never_fetched, listing=never_fetched)
     assert state == PhotosState(ONLINE, [], [])
 
 
-def test_the_photos_are_read_through_the_signed_fetch_unless_told_otherwise(monkeypatch):
+def test_the_photos_are_listed_and_read_through_the_signed_requests_unless_told_otherwise(monkeypatch):
     fetch = bucket({"santa.jpg": picture()})
     monkeypatch.setattr(r2, "fetch", fetch)
+    monkeypatch.setattr(r2, "entries", fetch.listing)
     state = photos_state(CONFIG, **BUCKET, load_previous=no_previous)
     assert state.fresh == ["santa"] and state.absent == ["vassena"]
-    assert len(fetch.asked) == 1 + 4  # the first house's file at once, the other's under every ending
+    assert len(fetch.listed) == 1 and fetched(fetch) == ["santa.jpg"]
 
 
 def test_the_photos_travel_with_the_calendar_and_are_recovered_from_the_published_page(tmp_path, monkeypatch):

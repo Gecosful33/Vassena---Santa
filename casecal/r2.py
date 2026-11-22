@@ -418,6 +418,15 @@ def _local(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
 
 
+@dataclass(frozen=True)
+class Entry:
+    """A file as a listing shows it: its name in the folder, its size, when it was last written."""
+
+    name: str
+    size: int = -1  # in bytes; -1 where the listing does not say
+    modified: str = ""  # as R2 writes it (2026-11-22T08:00:00.000Z): in order of time when sorted as text
+
+
 def names(
     url: str,
     key_id: str,
@@ -426,7 +435,19 @@ def names(
     session: requests.Session | None = None,
     now: datetime | None = None,
 ) -> list[str]:
-    """The names of the files in the folder ``url`` points to (the folder of the file, if it names one).
+    """The names of the files in the folder ``url`` points to (the folder of the file, if it names one)."""
+    return [entry.name for entry in entries(url, key_id, secret, session=session, now=now)]
+
+
+def entries(
+    url: str,
+    key_id: str,
+    secret: str,
+    *,
+    session: requests.Session | None = None,
+    now: datetime | None = None,
+) -> list[Entry]:
+    """The files in the folder ``url`` points to (the folder of the file, if it names one).
 
     Only the files directly there, not those of folders inside it. Raises
     ``StorageError`` with a message fit for a public log.
@@ -457,12 +478,15 @@ def names(
         raise unrecognised
     if any(_local(child.tag) == "IsTruncated" and (child.text or "").strip().lower() == "true" for child in root):
         raise StorageError("nel bucket ci sono troppi file per trovare da solo quello giusto: indica il file in COSTS_R2_URL")
-    keys = [
-        key.text or ""
-        for child in root
-        if _local(child.tag) == "Contents"
-        for key in child
-        if _local(key.tag) == "Key"
-    ]
-    here = [key[len(where.folder):] for key in keys if key.startswith(where.folder)]
-    return [name for name in here if name and "/" not in name]
+    found = []
+    for child in root:
+        if _local(child.tag) != "Contents":
+            continue
+        said = {_local(part.tag): (part.text or "") for part in child}
+        key, size = said.get("Key", ""), said.get("Size", "").strip()
+        if not key.startswith(where.folder):
+            continue
+        name = key[len(where.folder):]
+        if name and "/" not in name:
+            found.append(Entry(name, int(size) if size.isdigit() else -1, said.get("LastModified", "").strip()))
+    return found
