@@ -220,7 +220,10 @@ secret.
    l'id è quello di `properties.toml`: `santa.jpg` e `vassena.jpg`, in minuscolo. Il
    job le cerca anche con le estensioni `.jpeg`, `.png` e `.webp`. Una foto caricata
    con un altro nome si indica in `properties.toml`, nel blocco della casa, con
-   `photo = "<nome del file>"`.
+   `photo = "<nome del file>"`. Dal telefono conviene caricarle con `Scegli file`
+   dopo averle salvate in File: prese direttamente dalla libreria delle foto possono
+   arrivare nel bucket vuote. Un file vuoto viene scavalcato: il job passa al nome
+   successivo, quindi basta ricaricare la foto come `<id della casa>.jpg`.
 3. `Actions → Aggiornamento notturno → Run workflow`. Nel log compare
    `foto: lette (santa, vassena)`; per una casa di cui non trova il file scrive
    `foto: nessun file per …`, senza che sia un errore.
@@ -526,7 +529,7 @@ somma delle voci.
 | `spese non lette (foglio 2026: non trovo …)` | manca la riga `Voce`, la riga `SPESE` o quella che inizia con `Totale` | ripristinare la struttura del passo 7 |
 | `foglio 2026: il totale delle spese scritto nel foglio non è la somma delle voci` | la formula del totale non comprende tutte le righe | correggere la formula; la pagina usa comunque la somma delle voci |
 | `foglio 2026: una colonna non corrisponde a nessuna casa` / `manca la colonna della casa …` | intestazione diversa dal nome della casa | rinominare la colonna |
-| `foto non lette (il file è vuoto (0 byte): …): santa` | il caricamento nel bucket ha lasciato il nome ma non il contenuto: capita caricando dal telefono | caricare di nuovo la foto e controllare che nel bucket la sua dimensione non sia zero |
+| `foto non lette (il file è vuoto (0 byte): …): santa` | il caricamento nel bucket ha lasciato il nome ma non il contenuto: capita dal telefono, prendendo la foto dalla libreria | ricaricarla come `santa.jpg` con `Scegli file` (dopo averla salvata in File) e controllare che nel bucket la dimensione non sia zero; il file vuoto può restare |
 | `foto non lette (il file è in formato HEIC, …): santa` | foto di iPhone caricata senza conversione, anche se il nome finisce per `.jpeg` | esportarla in JPEG e ricaricarla |
 | `foto non lette (il file JPEG è danneggiato o incompleto (…)): santa` | trasferimento interrotto, o file rovinato | caricare di nuovo la foto |
 | `foto non lette (il file non è un'immagine …): santa` | sotto il nome della foto c'è altro: il messaggio dice cosa (un documento, un video, un testo) e quanto è grande | caricare la foto in JPEG, PNG o WebP |

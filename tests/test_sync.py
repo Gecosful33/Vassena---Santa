@@ -531,6 +531,30 @@ def test_a_photo_is_found_under_any_of_the_endings_a_photo_is_saved_with():
     assert photos_state(CONFIG, **BUCKET, load_previous=no_previous, fetch=other).absent == ["santa", "vassena"]
 
 
+def test_a_name_left_empty_by_a_failed_upload_is_passed_over_for_the_next_one():
+    # The phone left "IMG_0001.jpeg" in the bucket with nothing in it; the photo was then
+    # uploaded again under the house's own name. The empty one need not be removed first.
+    named = replace(CONFIG, properties=(replace(CONFIG.properties[0], photo="IMG_0001.jpeg"), *CONFIG.properties[1:]))
+    fetch = bucket({"IMG_0001.jpeg": b"", "santa.jpg": b"", "santa.jpeg": picture((900, 600)), "vassena.jpg": picture()})
+    state = photos_state(named, **BUCKET, load_previous=no_previous, fetch=fetch)
+    assert [unquote(url.rsplit("/", 1)[1]) for url, *_ in fetch.asked] == ["IMG_0001.jpeg", "santa.jpg", "santa.jpeg", "vassena.jpg"]
+    assert state.photos == {"santa": prepare(picture((900, 600))), "vassena": prepare(picture())}
+    assert state.fresh == ["santa", "vassena"] and state.warnings == [] and state.absent == []
+
+    # With no other name holding the photo, the empty file is what there is, and is said to be so.
+    fetch = bucket({"IMG_0001.jpeg": b"", "vassena.jpg": b""})
+    state = photos_state(named, **BUCKET, load_previous=published_with_photos, fetch=fetch)
+    assert state.photos == ONLINE and state.fresh == [] and state.absent == []
+    assert state.warnings == [
+        "foto non lette (il file è vuoto (0 byte): il caricamento nel bucket non è riuscito, va caricato di nuovo): "
+        "santa, vassena; restano quelle già pubblicate"
+    ]
+    assert [unquote(url.rsplit("/", 1)[1]) for url, *_ in fetch.asked] == [
+        "IMG_0001.jpeg", "santa.jpg", "santa.jpeg", "santa.png", "santa.webp",   # every name is tried before giving up
+        "vassena.jpg", "vassena.jpeg", "vassena.png", "vassena.webp",
+    ]
+
+
 def test_a_photo_that_cannot_be_fetched_or_read_keeps_the_one_already_published():
     refused = r2.StorageError("chiave rifiutata, oppure senza il permesso di lettura su questo bucket")
     state = photos_state(CONFIG, **BUCKET, load_previous=published_with_photos, fetch=bucket({"santa.jpg": refused, "vassena.jpg": refused}))
