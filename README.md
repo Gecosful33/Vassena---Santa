@@ -488,7 +488,7 @@ somma delle voci.
 | `avviso al proprietario non aggiornato (…)` | GitHub ha rifiutato la scrittura della segnalazione | controllare che il workflow abbia ancora `issues: write`; l'elenco nella pagina resta corretto |
 | `spese non lette (chiave rifiutata, …)` | chiave di R2 sbagliata, scaduta o non valida per quel bucket | ripetere i punti 4–7 del passo 7 |
 | `spese non lette (file non trovato: …)` | bucket o file con un nome diverso da quello in `COSTS_R2_URL`, anche solo per una maiuscola; oppure bucket con giurisdizione europea raggiunto senza `.eu.` nell'indirizzo | correggere il secret, o ricaricare il file con il nome atteso |
-| `spese non lette (COSTS_R2_URL non valido: …)` | indirizzo incompleto, pubblico (`r2.dev`) o con parametri in coda | usare la forma indicata al passo 7 |
+| `spese non lette (COSTS_R2_URL non valido: …)` | l'indirizzo non è quello completo del file; il messaggio dice quale parte manca o non va (di solito il nome del bucket e del file dopo l'endpoint, oppure si è incollato l'indirizzo pubblico `r2.dev` o quello del pannello) | riscrivere il secret nella forma indicata al passo 7; nessuna richiesta è partita, quindi le chiavi non sono ancora state provate |
 | `spese non lette (servono tutti e tre i secret …)` | manca uno dei tre secret | completare il passo 7 |
 | `spese non lette (il file non è una cartella di lavoro Excel …)` | caricato un `.xls`, un `.csv` o un file danneggiato | salvare come `.xlsx` e ricaricare |
 | `spese non lette (foglio 2026, riga 14: …)` | in una cella di importo c'è del testo, o una formula senza risultato | correggere quella riga (`n.a.` è ammesso) e ricaricare |

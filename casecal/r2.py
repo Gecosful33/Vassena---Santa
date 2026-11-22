@@ -26,6 +26,7 @@ MAX_BYTES = 5 * 1024 * 1024
 TIMEOUT_SECONDS = 30
 
 _HOST_RE = re.compile(r"^[a-z0-9-]+(\.[a-z0-9-]+)*\.r2\.cloudflarestorage\.com$")
+_ACCOUNT_RE = re.compile(r"^[0-9a-f]{32}$")  # what Cloudflare calls the Account ID
 URL_SHAPE = "https://<account>.r2.cloudflarestorage.com/<bucket>/<file>"
 
 
@@ -83,27 +84,48 @@ def authorization(
 
 
 def _target(url: str) -> tuple[str, str]:
-    """Host and percent-encoded path of the object, or ``StorageError`` if the address is not one."""
+    """Host and percent-encoded path of the object.
+
+    Raises ``StorageError`` saying which part of the address is wrong. In words
+    only: the address names the account, the bucket and the file, and the log
+    this ends up in is public, so nothing of it is ever quoted.
+    """
+
+    def refused(why: str) -> StorageError:
+        return StorageError(f"COSTS_R2_URL non valido: {why}. Forma attesa: {URL_SHAPE}")
+
+    # As it may be pasted into a secret: in quotes or brackets, or without its scheme.
+    text = url.strip().strip("\"'<>«»").strip()
+    if "://" not in text:
+        text = "https://" + text
     try:
-        parts = urlsplit(url.strip())
+        parts = urlsplit(text)
         host = (parts.hostname or "").lower()
         port = parts.port
     except ValueError:
-        raise StorageError(f"COSTS_R2_URL non valido: deve avere la forma {URL_SHAPE}") from None
+        raise refused("non è un indirizzo") from None
+    if parts.scheme != "https":
+        raise refused("deve iniziare con https://")
+    if not _HOST_RE.match(host):
+        if host.endswith(".r2.dev"):
+            raise refused("è l'indirizzo pubblico r2.dev, serve quello dell'API S3")
+        if host.endswith("cloudflare.com"):
+            raise refused("è una pagina del pannello di Cloudflare, serve l'indirizzo dell'API S3")
+        raise refused("l'host non è <account>.r2.cloudflarestorage.com")
+    if parts.username or parts.password or port not in (None, 443):
+        raise refused("non deve contenere credenziali né una porta")
+    if parts.query or parts.fragment:
+        raise refused("contiene «?» o «#»: niente parametri, e un nome di file senza quei segni")
     path = quote(unquote(parts.path), safe="/-_.~")
+    # "<bucket>.<account>..." names the bucket before the host: the same place as "<account>.../<bucket>".
+    labels = host.split(".")
+    if len(labels) > 4 and _ACCOUNT_RE.match(labels[1]):
+        host, path = ".".join(labels[1:]), f"/{labels[0]}{path}"
     bucket, _, name = path.lstrip("/").partition("/")
-    if (
-        parts.scheme != "https"
-        or not _HOST_RE.match(host)
-        or port not in (None, 443)
-        or parts.query
-        or parts.fragment
-        or parts.username
-        or not bucket
-        or not name
-        or name.endswith("/")
-    ):
-        raise StorageError(f"COSTS_R2_URL non valido: deve avere la forma {URL_SHAPE}")
+    if not bucket:
+        raise refused("dopo l'host mancano il nome del bucket e il nome del file")
+    if not name or name.endswith("/"):
+        raise refused("dopo il nome del bucket manca il nome del file")
     return host, path
 
 

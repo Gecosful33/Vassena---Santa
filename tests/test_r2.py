@@ -120,33 +120,80 @@ def test_a_name_is_signed_the_way_it_is_sent():
     )
 
 
+ACCOUNT = "0123456789abcdef0123456789abcdef"  # an Account ID: 32 hexadecimal characters
+HOST_ONLY = "l'host non è <account>.r2.cloudflarestorage.com"
+NO_FILE = "dopo il nome del bucket manca il nome del file"
+NO_BUCKET = "dopo l'host mancano il nome del bucket e il nome del file"
+EXTRAS = "contiene «?» o «#»: niente parametri, e un nome di file senza quei segni"
+NO_LOGIN = "non deve contenere credenziali né una porta"
+
+
 @pytest.mark.parametrize(
-    "url",
+    "url, reason",
     [
-        "",
-        "case-private/spese.xlsx",
-        "http://acc.r2.cloudflarestorage.com/b/f.xlsx",              # not encrypted in transit
-        "https://example.com/b/f.xlsx",                              # not R2
-        "https://r2.cloudflarestorage.com/b/f.xlsx",                 # no account
-        "https://acc.r2.cloudflarestorage.com.example.com/b/f.xlsx",
-        "https://pub-0123.r2.dev/f.xlsx",                            # a public bucket address
-        "https://acc.r2.cloudflarestorage.com/b",                    # a bucket, no file
-        "https://acc.r2.cloudflarestorage.com/b/",
-        "https://acc.r2.cloudflarestorage.com/b/cartella/",
-        "https://acc.r2.cloudflarestorage.com/b/f.xlsx?X-Amz-Signature=abc",  # a presigned link
-        "https://acc.r2.cloudflarestorage.com/b/f.xlsx#foglio",
-        "https://user:pass@acc.r2.cloudflarestorage.com/b/f.xlsx",
-        "https://acc.r2.cloudflarestorage.com:8443/b/f.xlsx",
-        "https://acc.r2.cloudflarestorage.com:porta/b/f.xlsx",
+        # What is most often pasted: the endpoint shown beside the keys, or the bucket's own address.
+        (f"https://{ACCOUNT}.r2.cloudflarestorage.com", NO_BUCKET),
+        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/", NO_BUCKET),
+        (f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com", NO_BUCKET),
+        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private", NO_FILE),
+        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private/", NO_FILE),
+        (f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private/cartella/", NO_FILE),
+        ("https://pub-0123.r2.dev/spese.xlsx", "è l'indirizzo pubblico r2.dev, serve quello dell'API S3"),
+        (f"https://dash.cloudflare.com/{ACCOUNT}/r2/default/buckets/case-private",
+         "è una pagina del pannello di Cloudflare, serve l'indirizzo dell'API S3"),
+        ("http://acc.r2.cloudflarestorage.com/b/f.xlsx", "deve iniziare con https://"),  # not encrypted in transit
+        ("https://example.com/b/f.xlsx", HOST_ONLY),
+        ("https://r2.cloudflarestorage.com/b/f.xlsx", HOST_ONLY),                    # no account
+        ("https://acc.r2.cloudflarestorage.com.example.com/b/f.xlsx", HOST_ONLY),
+        ("case-private/spese.xlsx", HOST_ONLY),                                      # a bucket and a file, nowhere
+        ("", HOST_ONLY),
+        ("https://acc.r2.cloudflarestorage.com/b/f.xlsx?X-Amz-Signature=abc", EXTRAS),  # a presigned link
+        ("https://acc.r2.cloudflarestorage.com/b/f.xlsx#foglio", EXTRAS),
+        ("https://user:pass@acc.r2.cloudflarestorage.com/b/f.xlsx", NO_LOGIN),
+        ("https://acc.r2.cloudflarestorage.com:8443/b/f.xlsx", NO_LOGIN),
+        ("https://acc.r2.cloudflarestorage.com:porta/b/f.xlsx", "non è un indirizzo"),
     ],
 )
-def test_an_address_that_is_not_a_file_in_a_bucket_is_refused_before_any_request(url):
+def test_an_address_that_is_not_a_file_in_a_bucket_is_refused_before_any_request(url, reason):
     session = FakeSession()
     with pytest.raises(StorageError) as caught:
         fetch(url, KEY_ID, SECRET, session=session, now=NOW)
     assert session.calls == []
-    # The reason shows the shape wanted and nothing of what was given: the log is public.
-    assert str(caught.value) == f"COSTS_R2_URL non valido: deve avere la forma {r2.URL_SHAPE}"
+    # The reason says which part is wrong and shows the shape wanted, in words: the log is public,
+    # and the address names the account, the bucket and the file.
+    message = str(caught.value)
+    assert message == f"COSTS_R2_URL non valido: {reason}. Forma attesa: {r2.URL_SHAPE}"
+    for given in (ACCOUNT, "case-private", "spese", "pub-0123", "example.com", "user", "pass", "Signature"):
+        assert given not in message
+
+
+def test_an_address_pasted_a_little_differently_is_still_understood():
+    def target(url):
+        session = FakeSession()
+        fetch(url, KEY_ID, SECRET, session=session, now=NOW)
+        return session.calls[0][0]
+
+    plain = f"https://{ACCOUNT}.r2.cloudflarestorage.com/case-private/spese.xlsx"
+    assert target(plain) == plain
+    # Without its scheme, or with the quotes or brackets it was shown in.
+    assert target(f"{ACCOUNT}.r2.cloudflarestorage.com/case-private/spese.xlsx") == plain
+    assert target(f'"{plain}"') == plain and target(f"'{plain}'") == plain and target(f"<{plain}>") == plain
+    assert target(f"  {plain}\n") == plain
+    # With the bucket named before the host: the same place, said the other way.
+    assert target(f"https://case-private.{ACCOUNT}.r2.cloudflarestorage.com/spese.xlsx") == plain
+    assert target(f"https://case-private.{ACCOUNT}.eu.r2.cloudflarestorage.com/conti/spese.xlsx") == (
+        f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com/case-private/conti/spese.xlsx"
+    )
+    # A bucket in the European jurisdiction is not a bucket named "eu"... nor is the account one.
+    assert target(f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com/case-private/spese.xlsx") == (
+        f"https://{ACCOUNT}.eu.r2.cloudflarestorage.com/case-private/spese.xlsx"
+    )
+    # The request is signed for the host it is sent to.
+    session = FakeSession()
+    fetch(f"https://case-private.{ACCOUNT}.r2.cloudflarestorage.com/spese.xlsx", KEY_ID, SECRET, session=session, now=NOW)
+    assert session.calls[0][1]["headers"]["Authorization"] == authorization(
+        "GET", f"{ACCOUNT}.r2.cloudflarestorage.com", "/case-private/spese.xlsx", {}, key_id=KEY_ID, secret=SECRET, when=NOW
+    )
 
 
 @pytest.mark.parametrize(
