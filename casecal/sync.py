@@ -338,15 +338,25 @@ def photos_state(
         return PhotosState(dict(load_previous().photos), [])
 
     def stored(prop: PropertyConfig, where: str) -> bytes | None:
-        """The file kept for this house, under the first of its possible names; None if there is none."""
+        """The file kept for this house, under the first of its possible names that holds anything; None if there is none.
+
+        An upload from a phone may leave a name in the bucket and nothing under
+        it. Such a file is passed over for the next name, so that uploading the
+        photo again under the house's own name is enough; it is returned, empty
+        as it is, only when no other name holds the photo.
+        """
         # The name the configuration gives it, if any, then the house's id with a photo's usual endings.
         possible = ([prop.photo] if prop.photo else []) + [prop.id + ending for ending in FILE_ENDINGS]
+        left_empty = False
         for name in possible:
             try:
-                return (fetch or r2.fetch)(r2.sibling(where, name), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
+                held = (fetch or r2.fetch)(r2.sibling(where, name), key_id, secret, max_bytes=MAX_SOURCE_BYTES)
             except r2.NotFound:
                 continue
-        return None
+            if held:
+                return held
+            left_empty = True
+        return b"" if left_empty else None
 
     photos: dict[str, Photo] = {}
     fresh: list[str] = []
