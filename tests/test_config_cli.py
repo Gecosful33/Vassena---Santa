@@ -530,7 +530,7 @@ def test_sync_keeps_the_photos_already_published_when_one_cannot_be_read(monkeyp
     monkeypatch.setattr(cli, "previous_from_site", lambda site_url, **settings: sync.PreviousPage(photos={"santa": online}))
     family, printed, outputs = run_sync(monkeypatch, capsys, tmp_path, None, **BUCKET_ENV)
     assert family["photos"] == {"santa": online.to_dict()}
-    assert "foto: foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP)): santa" in printed
+    assert "foto: foto non lette (il file non è un'immagine leggibile (JPEG, PNG o WebP; è di 11 byte)): santa" in printed
     assert "degraded=true" in outputs  # the page is published, then the run asks for attention
 
 

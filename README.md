@@ -526,7 +526,10 @@ somma delle voci.
 | `spese non lette (foglio 2026: non trovo …)` | manca la riga `Voce`, la riga `SPESE` o quella che inizia con `Totale` | ripristinare la struttura del passo 7 |
 | `foglio 2026: il totale delle spese scritto nel foglio non è la somma delle voci` | la formula del totale non comprende tutte le righe | correggere la formula; la pagina usa comunque la somma delle voci |
 | `foglio 2026: una colonna non corrisponde a nessuna casa` / `manca la colonna della casa …` | intestazione diversa dal nome della casa | rinominare la colonna |
-| `foto non lette (il file non è un'immagine leggibile …): santa` | caricato un HEIC, o un file che non è una foto | esportare in JPEG e ricaricare come `santa.jpg` |
+| `foto non lette (il file è vuoto (0 byte): …): santa` | il caricamento nel bucket ha lasciato il nome ma non il contenuto: capita caricando dal telefono | caricare di nuovo la foto e controllare che nel bucket la sua dimensione non sia zero |
+| `foto non lette (il file è in formato HEIC, …): santa` | foto di iPhone caricata senza conversione, anche se il nome finisce per `.jpeg` | esportarla in JPEG e ricaricarla |
+| `foto non lette (il file JPEG è danneggiato o incompleto (…)): santa` | trasferimento interrotto, o file rovinato | caricare di nuovo la foto |
+| `foto non lette (il file non è un'immagine …): santa` | sotto il nome della foto c'è altro: il messaggio dice cosa (un documento, un video, un testo) e quanto è grande | caricare la foto in JPEG, PNG o WebP |
 | `foto non lette (file troppo grande …)` / `(immagine troppo grande …)` | file oltre 20 MB, o oltre 60 megapixel | ridurre la foto e ricaricarla |
 | `foto non lette (chiave rifiutata, …)` / `(Cloudflare R2 non raggiungibile …)` | la stessa causa di `spese non lette` | vedi le righe sopra |
 
