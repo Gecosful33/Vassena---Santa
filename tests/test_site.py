@@ -218,6 +218,16 @@ def test_the_written_site_can_be_read_back_and_opened(built, tmp_path):
     index = write_site(tmp_path / "out", page)
     assert index.name == "index.html"
     assert (tmp_path / "out" / "robots.txt").read_text() == "User-agent: *\nDisallow: /\n"
+    # What a phone needs to keep the page on its home screen like an app: a name and an icon, nothing private.
+    import json as _json
+    from PIL import Image as _Image
+    declared = _json.loads((tmp_path / "out" / "manifest.webmanifest").read_text(encoding="utf-8"))
+    assert declared["display"] == "standalone" and declared["start_url"] == "./" and declared["name"] == "Calendario case"
+    for entry in declared["icons"] + [{"src": "apple-touch-icon.png", "sizes": "180x180"}]:
+        with _Image.open(tmp_path / "out" / entry["src"]) as drawn:
+            assert drawn.format == "PNG" and "x".join(map(str, drawn.size)) == entry["sizes"]
+    assert 'rel="manifest" href="manifest.webmanifest"' in page and 'rel="apple-touch-icon"' in page
+    assert "manifest-src 'self'" in _csp(page) and "default-src 'none'" in _csp(page)
     envelope = extract_envelope(index.read_text(encoding="utf-8"))
     family, owner = open_envelope(envelope, passphrase=DEMO_PASSPHRASE)
     assert family == snapshot.family_payload()
