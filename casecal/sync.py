@@ -508,4 +508,4 @@ def publish(
     family, owner = open_envelope(envelope, passphrase=passphrase)
     if family != family_payload or owner != owner_payload:
         raise SiteError("envelope self-check failed")
-    return write_site(out_dir, render_page(envelope, title=snapshot.title))
+    return write_site(out_dir, render_page(envelope, title=snapshot.title), title=snapshot.title)

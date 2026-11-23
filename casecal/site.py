@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 import requests
+from PIL import Image, ImageDraw
 
 WEB_DIR = Path(__file__).parent / "web"
 SCRIPTS = ("crypto.js", "logic.js", "store.js", "app.js")
@@ -63,7 +64,8 @@ def render_page(envelope: Mapping[str, Any], *, title: str) -> str:
             f"script-src '{_csp_hash(script)}'",
             f"style-src '{_csp_hash(css)}'",
             "connect-src https://api.github.com",
-            "img-src data:",
+            "img-src data: 'self'",  # the houses' photos, and the icon the page is installed with
+            "manifest-src 'self'",
             "base-uri 'none'",
             "form-action 'none'",
         ]
@@ -114,9 +116,47 @@ def fetch_published_envelope(site_url: str, *, timeout: float = 20.0) -> dict[st
     return extract_envelope(response.text)
 
 
-def write_site(out_dir: str | Path, page: str) -> Path:
+ICON_BACKGROUND, ICON_ROOF, ICON_WALL, ICON_DOOR = "#eb6834", "#ffffff", "#ffffff", "#6250d6"
+
+
+def icon(size: int) -> Image.Image:
+    """The picture the page has on a phone's home screen: a house, drawn here so that no file is kept."""
+    scale = 4  # drawn large and reduced, for smooth edges
+    side = size * scale
+    image = Image.new("RGB", (side, side), ICON_BACKGROUND)
+    draw = ImageDraw.Draw(image)
+    u = side / 100
+    draw.polygon([(50 * u, 22 * u), (82 * u, 50 * u), (18 * u, 50 * u)], fill=ICON_ROOF)
+    draw.rectangle([27 * u, 48 * u, 73 * u, 78 * u], fill=ICON_WALL)
+    draw.rectangle([44 * u, 58 * u, 56 * u, 78 * u], fill=ICON_DOOR)
+    return image.resize((size, size), Image.LANCZOS)
+
+
+def manifest(title: str) -> dict[str, Any]:
+    """What a phone needs to keep the page on its home screen and open it like an app, without the browser's bars."""
+    return {
+        "name": title,
+        "short_name": "Case",
+        "lang": "it",
+        "start_url": "./",
+        "scope": "./",
+        "display": "standalone",
+        "background_color": "#f9f9f7",
+        "theme_color": "#f9f9f7",
+        "icons": [
+            {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
+            {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+        ],
+    }
+
+
+def write_site(out_dir: str | Path, page: str, *, title: str = "Calendario case") -> Path:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_text(page, encoding="utf-8", newline="\n")
+    # Nothing here is private: a name, and a drawing of a house.
+    (out / "manifest.webmanifest").write_text(json.dumps(manifest(title), ensure_ascii=False, indent=1), encoding="utf-8")
+    for name, size in (("icon-192.png", 192), ("icon-512.png", 512), ("apple-touch-icon.png", 180)):
+        icon(size).save(out / name, "PNG", optimize=True)
     (out / "robots.txt").write_text("User-agent: *\nDisallow: /\n", encoding="utf-8")
     return out / "index.html"
