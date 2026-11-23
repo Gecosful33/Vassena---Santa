@@ -66,6 +66,7 @@ def render_page(envelope: Mapping[str, Any], *, title: str) -> str:
             "connect-src https://api.github.com",
             "img-src data: 'self'",  # the houses' photos, and the icon the page is installed with
             "manifest-src 'self'",
+            "worker-src 'self'",  # sw.js, which keeps the page for when there is no connection
             "base-uri 'none'",
             "form-action 'none'",
         ]
@@ -156,6 +157,7 @@ def write_site(out_dir: str | Path, page: str, *, title: str = "Calendario case"
     (out / "index.html").write_text(page, encoding="utf-8", newline="\n")
     # Nothing here is private: a name, and a drawing of a house.
     (out / "manifest.webmanifest").write_text(json.dumps(manifest(title), ensure_ascii=False, indent=1), encoding="utf-8")
+    (out / "sw.js").write_text(_read("sw.js"), encoding="utf-8", newline="\n")
     for name, size in (("icon-192.png", 192), ("icon-512.png", 512), ("apple-touch-icon.png", 180)):
         icon(size).save(out / name, "PNG", optimize=True)
     (out / "robots.txt").write_text("User-agent: *\nDisallow: /\n", encoding="utf-8")

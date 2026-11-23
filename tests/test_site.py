@@ -228,6 +228,12 @@ def test_the_written_site_can_be_read_back_and_opened(built, tmp_path):
             assert drawn.format == "PNG" and "x".join(map(str, drawn.size)) == entry["sizes"]
     assert 'rel="manifest" href="manifest.webmanifest"' in page and 'rel="apple-touch-icon"' in page
     assert "manifest-src 'self'" in _csp(page) and "default-src 'none'" in _csp(page)
+    # The worker that keeps the page for when there is no connection: a file of the site's own, and
+    # every file it keeps is one the site publishes.
+    worker = (tmp_path / "out" / "sw.js").read_text(encoding="utf-8")
+    assert "worker-src 'self'" in _csp(page) and 'register("sw.js")' in page
+    for kept in re.search(r"var FILES = \[(.*?)\];", worker).group(1).replace('"', "").split(", "):
+        assert kept == "./" or (tmp_path / "out" / kept).is_file()
     envelope = extract_envelope(index.read_text(encoding="utf-8"))
     family, owner = open_envelope(envelope, passphrase=DEMO_PASSPHRASE)
     assert family == snapshot.family_payload()
