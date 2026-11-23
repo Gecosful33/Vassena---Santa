@@ -1716,4 +1716,10 @@
   }
 
   boot();
+
+  // Keep a copy of the page for when there is no connection (see sw.js). Only where the
+  // browser allows it: over https, or on the machine the page is being tried on.
+  if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {
+    navigator.serviceWorker.register("sw.js").catch(function () { /* the page works without it */ });
+  }
 })();
