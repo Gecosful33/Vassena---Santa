@@ -579,8 +579,13 @@ async function main() {
   // The nights still to be blocked for the family: this house has some, and says which.
   const todo = await page.locator(".todo").innerText();
   // The request to the manager, ready for WhatsApp: the owner's own words, with whole periods as its dates.
-  const ask = new URL(await page.locator(".todo a[data-key^='ask:']").first().getAttribute("href"));
+  const ask = new URL(await page.locator(".people .section-head a[data-key^='ask:']").first().getAttribute("href"));
   assert.equal(ask.origin + ask.pathname, "https://wa.me/");
+  // Both buttons sit beside "Aggiungi un periodo", where the periods are, and no longer among the figures.
+  // (The demo has no portal to look at: there the two are the request and the new period.)
+  assert.deepEqual(await page.locator(".people .section-head .actions > *").allInnerTexts(),
+    ["Chiedi il blocco su WhatsApp", "Aggiungi un periodo"]);
+  assert.equal(await page.locator(".todo a").count(), 0);
   assert.match(ask.searchParams.get("text"),
     /^Buongiorno,\nvorremmo bloccare i seguenti periodi per uso famiglia:\n\n(\* dal \d{1,2} [a-zà-ù]+ \d{4} al \d{1,2} [a-zà-ù]+ \d{4}\n)+\nDateci conferma di ricezione,\nGrazie$/);
   assert.match(todo, /Da far bloccare al gestore/);

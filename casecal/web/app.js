@@ -803,6 +803,40 @@
   }
 
   /** Who uses each house: the list everyone can add to and change. */
+  /** The family's periods of a house that are not known to be blocked on the portal, with their standing. */
+  function openPeriods(prop) {
+    var open = [];
+    L.entriesOf(state.entries, prop.id).forEach(function (entry) {
+      if (entry.end <= state.today) return;
+      var status = L.entryStatus(entry, prop);
+      if (status.state !== "conflict" && status.open.length) open.push({ entry: entry, status: status });
+    });
+    return open;
+  }
+
+  /**
+   * What to do about a house's periods still to be blocked: ask its manager, with the
+   * message written, and look at the portal. Null when there is nothing to ask.
+   */
+  function blockActions(prop) {
+    if (prop.missing) return null;
+    var open = openPeriods(prop);
+    if (!open.length) return null;
+    var raw = state.owner && state.owner.properties.filter(function (candidate) { return candidate.id === prop.id; })[0];
+    var url = raw && raw.portal_url;
+    return [
+      // WhatsApp opens with the message written and asks which chat to send it to: the
+      // page knows no number and sends nothing itself.
+      el("a", {
+        class: "btn whatsapp", "data-key": "ask:" + prop.id, target: "_blank", rel: "noopener noreferrer",
+        href: "https://wa.me/?text=" + encodeURIComponent(blockRequest(open)), text: "Chiedi il blocco su WhatsApp"
+      }),
+      typeof url === "string" && url.indexOf("https://") === 0
+        ? el("a", { class: "btn portal", href: url, target: "_blank", rel: "noopener noreferrer", text: "Controlla sul portale di " + prop.label })
+        : null
+    ];
+  }
+
   function familySection() {
     var props = visible(); // also a house whose portal could not be read: its notes are still there
     if (!props.length) return null;
@@ -814,12 +848,14 @@
     var first = readable()[0] || props[0];
     return el("section", { class: "card people" },
       el("div", { class: "section-head" }, el("h2", { text: "Chi usa la casa" }),
-        state.store ? el("button", {
-          class: "btn primary", type: "button", "data-key": "family-add", text: "Aggiungi un periodo",
-          onclick: function () {
-            entrySheet(null, L.draftPeriod(first, L.firstOpenDay(first, state.today, state.entries), state.entries));
-          }
-        }) : null),
+        el("div", { class: "actions" },
+          props.map(blockActions),
+          state.store ? el("button", {
+            class: "btn primary", type: "button", "data-key": "family-add", text: "Aggiungi un periodo",
+            onclick: function () {
+              entrySheet(null, L.draftPeriod(first, L.firstOpenDay(first, state.today, state.entries), state.entries));
+            }
+          }) : null)),
       el("p", { class: "hint", text: "Segna quando usi una casa, così lo sanno tutti. È un promemoria: per impedire le prenotazioni degli ospiti le date vanno fatte bloccare al gestore, e ogni periodo indica se lo sono già." }),
       syncLine(),
       el("div", { class: "stays" }, groups.map(function (group) {
@@ -833,8 +869,8 @@
 
   /**
    * For the owner: the nights family members are counting on that are not known to be
-   * blocked. Blocking is the manager's job, asked for by hand; the link only lets the
-   * owner look at the portal.
+   * blocked. Blocking is the manager's job, asked for by hand: the buttons that do so are
+   * beside the family's periods (see blockActions).
    */
   /**
    * The message that asks a house's manager to block the periods still open, as its owner
@@ -851,37 +887,20 @@
       "\n\nDateci conferma di ricezione,\nGrazie";
   }
 
-  function closingList(props, byId) {
+  function closingList(props) {
     var groups = props.map(function (prop) {
-      var open = [];
-      L.entriesOf(state.entries, prop.id).forEach(function (entry) {
-        if (entry.end <= state.today) return;
-        var status = L.entryStatus(entry, prop);
-        if (status.state !== "conflict" && status.open.length) open.push({ entry: entry, status: status });
-      });
-      return { prop: prop, open: open };
+      return { prop: prop, open: openPeriods(prop) };
     }).filter(function (group) { return group.open.length; });
     if (!groups.length) return null;
     return el("div", { class: "todo" },
       el("h3", null, icon("warning"), "Da far bloccare al gestore"),
       groups.map(function (group) {
-        var url = byId[group.prop.id] && byId[group.prop.id].portal_url;
         return el("div", { class: "p" + group.prop.index },
           el("h4", null, el("i", { class: "swatch" }), group.prop.label),
           el("ul", { class: "plain" }, group.open.map(function (item) {
             return el("li", { text: runsText(item.status.open) + " · " + item.entry.who +
               (item.status.state === "unknown" ? " · da verificare: il portale non pubblica ancora queste date" : "") });
-          })),
-          el("div", { class: "actions" },
-            // WhatsApp opens with the message written and asks which chat to send it to: the
-            // page knows no number and sends nothing itself.
-            el("a", {
-              class: "btn primary", "data-key": "ask:" + group.prop.id, target: "_blank", rel: "noopener noreferrer",
-              href: "https://wa.me/?text=" + encodeURIComponent(blockRequest(group.open)), text: "Chiedi il blocco su WhatsApp"
-            }),
-            typeof url === "string" && url.indexOf("https://") === 0
-              ? el("a", { class: "btn", href: url, target: "_blank", rel: "noopener noreferrer", text: "Controlla sul portale di " + group.prop.label })
-              : null));
+          })));
       }));
   }
 
@@ -1462,7 +1481,7 @@
       el("h2", { text: "Area proprietà" }),
       years.length > 1 ? segmented("year", "Anno", years.map(function (y) { return { id: y, label: String(y) }; }), year,
         function (id, key) { state.year = id; render(key); }) : null));
-    append(section, closingList(scoped, byId));
+    append(section, closingList(scoped));
     if (!years.length) {
       append(section, el("p", { class: "empty", text: "Nessun dato economico disponibile per questa casa." }));
       return section;

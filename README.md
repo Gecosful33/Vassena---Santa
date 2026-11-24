@@ -334,7 +334,8 @@ portali e non manda richieste a nessuno. Nell'area proprietà di ciascuna casa l
 «Da far bloccare al gestore» raccoglie le notti ancora scoperte, con un link al portale
 per controllare.
 
-Sotto l'elenco di ciascuna casa il pulsante «Chiedi il blocco su WhatsApp» apre WhatsApp
+In «Chi usa la casa», accanto ad «Aggiungi un periodo», quando la casa ha periodi ancora
+da bloccare compaiono «Controlla sul portale» e «Chiedi il blocco su WhatsApp», che apre WhatsApp
 con la richiesta già scritta (i periodi di quella casa ancora da bloccare, dal giorno di
 arrivo a quello di partenza) e fa scegliere la chat o il gruppo a cui mandarla. La
 pagina non conosce numeri e non invia nulla da sé: il messaggio parte solo quando lo si
