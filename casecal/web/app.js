@@ -917,15 +917,60 @@
       return { id: prop.id, label: prop.label, index: prop.index, photo: prop.photo };
     });
     if (withPnl) options.push({ id: PNL, label: "P&L" });
-    return el("div", null, segmented("house", withPnl ? "Vista" : "Casa", options, state.pnl ? PNL : state.house, function (id, key) {
-      state.pnl = id === PNL;
-      if (!state.pnl) {
-        state.house = id;
-        rememberHouse(id);
-      }
-      render(key);
-    }));
+    return el("div", null, segmented("house", withPnl ? "Vista" : "Casa", options, state.pnl ? PNL : state.house, showView));
   }
+
+  /** Show a house, or the profit and loss. */
+  function showView(id, key) {
+    state.pnl = id === PNL;
+    if (!state.pnl) {
+      state.house = id;
+      rememberHouse(id);
+    }
+    render(key);
+  }
+
+  /** The views the tabs lead to, in their order: the houses, then the profit and loss if there is one. */
+  function views() {
+    var ids = state.props.map(function (prop) { return prop.id; });
+    if (pnlSheets().length) ids.push(PNL);
+    return ids;
+  }
+
+  /* A finger drawn across the page turns to the next view, as it would the pages of an app:
+   * to the left for the one after, to the right for the one before. Not at the ends, not while
+   * a form is open, and not where the finger is on something that scrolls sideways itself. */
+  var stroke = null;
+
+  function scrollsSideways(node) {
+    for (; node && node !== root && node.nodeType === 1; node = node.parentNode) {
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(node.tagName)) return true;
+      var flow = getComputedStyle(node).overflowX;
+      if ((flow === "auto" || flow === "scroll") && node.scrollWidth > node.clientWidth + 1) return true;
+    }
+    return false;
+  }
+
+  root.addEventListener("touchstart", function (event) {
+    stroke = null;
+    if (!state || !state.props || sheet || event.touches.length !== 1 || scrollsSideways(event.target)) return;
+    stroke = { x: event.touches[0].clientX, y: event.touches[0].clientY, at: Date.now() };
+  }, { passive: true });
+
+  root.addEventListener("touchend", function (event) {
+    var begun = stroke, touch = event.changedTouches[0];
+    stroke = null;
+    if (!begun || !touch || sheet) return;
+    var across = touch.clientX - begun.x, down = touch.clientY - begun.y;
+    // Long, quick and level: anything else is a scroll, or a tap that slipped.
+    if (Math.abs(across) < 70 || Math.abs(across) < 2.5 * Math.abs(down) || Date.now() - begun.at > 700) return;
+    var all = views(), next = all.indexOf(state.pnl ? PNL : state.house) + (across < 0 ? 1 : -1);
+    if (all.length < 2 || next < 0 || next >= all.length) return;
+    showView(all[next]);
+    window.scrollTo(0, 0);
+  }, { passive: true });
+
+  root.addEventListener("touchcancel", function () { stroke = null; }, { passive: true });
 
   /** How far away a check-in is, in words. */
   function inDaysLabel(days) {
