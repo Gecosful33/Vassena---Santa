@@ -286,3 +286,16 @@ def test_the_workflow_lets_the_job_write_the_alert_as_github_actions():
     # The workflow's own token, not a secret of the owner's: nobody is notified of what they do themselves.
     assert "ALERTS_TOKEN: ${{ github.token }}" in workflow
     assert "ALERTS_TOKEN: ${{ secrets." not in workflow
+
+
+def test_a_period_written_in_the_log_starts_the_job_at_once_and_nothing_else_does():
+    from casecal.familylog import ISSUE_TITLE as LOG_TITLE
+
+    workflow = (ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
+    # The owner is told by mail when there are dates to have blocked: not the night after.
+    assert "issue_comment:" in workflow and "types: [created]" in workflow
+    # On a public repository anyone may comment somewhere: only the log's own comments count,
+    # written with the owner's token.
+    assert f"github.event.issue.title == '{LOG_TITLE}'" in workflow
+    assert "github.event.comment.user.login == github.repository_owner" in workflow
+    assert "!github.event.issue.pull_request" in workflow

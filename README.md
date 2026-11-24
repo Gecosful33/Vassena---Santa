@@ -350,7 +350,8 @@ modificano lo stesso periodo negli stessi istanti vale l'ultima scrittura.
 **Avviso al proprietario.** Per non dover aprire la pagina per accorgersene, il job
 notturno tiene aperta una issue «Date da far bloccare al gestore», assegnata al
 proprietario del repository: GitHub lo notifica, per mail con le impostazioni
-predefinite dell'account. Succede quando un periodo
+predefinite dell'account. Il job parte anche da solo, entro un paio di minuti, ogni
+volta che qualcuno inserisce un periodo: la mail non aspetta la notte. Succede quando un periodo
 entra in «Da far bloccare al gestore» o in «Ci sono ospiti in quelle date» (appena
 inserito, perché il gestore ha riaperto la vendita, o perché è arrivata una
 prenotazione); il lunedì arriva un promemoria finché restano periodi non bloccati che
