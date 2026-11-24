@@ -22,7 +22,7 @@
       // `house` is the house on show: the page deals with one at a time.
       // `pnl` says that the profit and loss is on show instead of a house.
       family: null, owner: null, props: [], today: 0, house: null, year: null, pnl: false, pnlYear: null,
-      showPast: false, pastStays: {}, allGuests: {}, remembered: false,
+      showPast: false, allGuests: {}, remembered: false,
       // The family's own entries: the current map, where changes are written (null =
       // read-only page), how far the log has been read, and the key that opens it.
       entries: {}, store: null, cursor: 0, familyKey: null,
@@ -1325,56 +1325,6 @@
     return section;
   }
 
-  /** Stays as a table. Rows are grouped by check-in year so that dates stay short on a phone. */
-  function stayRows(stays, prop) {
-    var year = L.parts(state.today).y;
-    var rows = [];
-    stays.forEach(function (stay) {
-      var stayYear = L.parts(stay.start).y;
-      if (stayYear !== year) {
-        year = stayYear;
-        rows.push(el("tr", { class: "year" }, el("th", { colspan: "4", scope: "colgroup", text: String(year) })));
-      }
-      var running = stay.start <= state.today && state.today < stay.end;
-      rows.push(el("tr", { class: running ? "current" : null },
-        el("td", { class: "date", text: F.day.format(dateOf(stay.start)) }),
-        el("td", { class: "date", text: F.day.format(dateOf(stay.end)) }),
-        el("td", { class: "num", text: F.int.format(stay.end - stay.start) }),
-        el("td", null, el("span", { class: "state" }, icon(stay.kind),
-          el("span", null, STATE_TEXT[stay.kind] + (running ? " · in corso" : ""),
-            stayDetails(stay) ? el("span", { class: "sub", text: stayDetails(stay) }) : null)))));
-    });
-    return el("div", { class: "scroll" }, el("table", { class: "rows" },
-      el("thead", null, el("tr", null,
-        el("th", { scope: "col" }, "Check-in", el("span", { class: "sub", text: "dalle " + prop.hours.checkIn })),
-        el("th", { scope: "col" }, "Check-out", el("span", { class: "sub", text: "entro le " + prop.hours.checkOut })),
-        el("th", { scope: "col", class: "num", text: "Notti" }), el("th", { scope: "col", text: "Stato" }))),
-      el("tbody", null, rows)));
-  }
-
-  function staysSection() {
-    var props = readable();
-    if (!props.length) return null;
-    return el("section", { class: "card" },
-      el("div", { class: "section-head" }, el("h2", { text: "Soggiorni e blocchi" }),
-        el("span", { class: "hint", text: "Gli stessi dati del calendario, in tabella." })),
-      el("div", { class: "stays" }, props.map(function (prop) {
-        var upcoming = prop.stays.filter(function (stay) { return stay.end > state.today; });
-        var past = prop.stays.filter(function (stay) { return stay.end <= state.today; }).reverse();
-        var open = !!state.pastStays[prop.id];
-        var key = "past-stays:" + prop.id;
-        return el("div", { class: "p" + prop.index },
-          el("h3", null, el("i", { class: "swatch" }), prop.label),
-          upcoming.length ? stayRows(upcoming, prop) : el("p", { class: "empty", text: "Nessun soggiorno in programma." }),
-          past.length ? el("button", {
-            class: "btn quiet more", type: "button", "data-key": key, "aria-expanded": String(open),
-            text: open ? "Nascondi i soggiorni passati" : "Mostra i soggiorni passati (" + past.length + ")",
-            onclick: function () { state.pastStays[prop.id] = !open; render(key); }
-          }) : null,
-          open && past.length ? stayRows(past, prop) : null);
-      })));
-  }
-
   /* ---------- owner area ---------- */
 
   function tile(label, value, note) {
@@ -1745,7 +1695,7 @@
     if (state.pnl && !pnlSheets().length) state.pnl = false;
     root.appendChild(el("div", { class: "shell" }, header(), banners(), houseTabs(),
       state.pnl ? pnlSection()
-        : [availability(), calendar(), familySection(), staysSection(), ownerSection(), footer()]));
+        : [availability(), calendar(), familySection(), ownerSection(), footer()]));
     window.scrollTo(0, scroll);
     fitLabels();
     // Not while a sheet is open: the focus belongs inside it, and it will ask for it back.

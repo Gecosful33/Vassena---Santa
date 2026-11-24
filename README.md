@@ -256,7 +256,6 @@ ricorda l'ultima scelta.
 | Prossimi ospiti | chi c'è ora e i prossimi arrivi |
 | Calendario | soggiorni degli ospiti, date bloccate e periodi della famiglia |
 | «Chi usa la casa» | periodi della famiglia, inseribili e modificabili da tutti |
-| Soggiorni e blocchi | elenco con canale e numero di ospiti |
 | Area proprietà | date che la famiglia conta di usare ma ancora in vendita, con il link al portale; riquadri di sintesi dell'anno, grafico del netto, statistiche mensili |
 
 Se il P&L è attivo (passo 7), dopo le schede delle case c'è il tasto «P&L»: riguarda
