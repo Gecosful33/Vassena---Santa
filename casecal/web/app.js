@@ -87,6 +87,7 @@
     short: dtf({ timeZone: "UTC", day: "numeric", month: "short" }),
     shortYear: dtf({ timeZone: "UTC", day: "numeric", month: "short", year: "numeric" }),
     long: dtf({ timeZone: "UTC", weekday: "long", day: "numeric", month: "long", year: "numeric" }),
+    written: dtf({ timeZone: "UTC", day: "numeric", month: "long", year: "numeric" }),
     month: dtf({ timeZone: "UTC", month: "long", year: "numeric" }),
     monthName: dtf({ timeZone: "UTC", month: "long" }),
     monthShort: dtf({ timeZone: "UTC", month: "short" }),
@@ -835,6 +836,21 @@
    * blocked. Blocking is the manager's job, asked for by hand; the link only lets the
    * owner look at the portal.
    */
+  /**
+   * The message that asks a house's manager to block the periods still open, as its owner
+   * sends it to the manager's group: the words are the owner's own, the dates are whole
+   * periods (the day of arrival and the day of leaving), each said once.
+   */
+  function blockRequest(open) {
+    var periods = [];
+    open.forEach(function (item) {
+      var line = "* dal " + F.written.format(dateOf(item.entry.start)) + " al " + F.written.format(dateOf(item.entry.end));
+      if (periods.indexOf(line) < 0) periods.push(line);
+    });
+    return "Buongiorno,\nvorremmo bloccare i seguenti periodi per uso famiglia:\n\n" + periods.join("\n") +
+      "\n\nDateci conferma di ricezione,\nGrazie";
+  }
+
   function closingList(props, byId) {
     var groups = props.map(function (prop) {
       var open = [];
@@ -856,9 +872,16 @@
             return el("li", { text: runsText(item.status.open) + " · " + item.entry.who +
               (item.status.state === "unknown" ? " · da verificare: il portale non pubblica ancora queste date" : "") });
           })),
-          typeof url === "string" && url.indexOf("https://") === 0
-            ? el("a", { class: "btn", href: url, target: "_blank", rel: "noopener noreferrer", text: "Controlla sul portale di " + group.prop.label })
-            : null);
+          el("div", { class: "actions" },
+            // WhatsApp opens with the message written and asks which chat to send it to: the
+            // page knows no number and sends nothing itself.
+            el("a", {
+              class: "btn primary", "data-key": "ask:" + group.prop.id, target: "_blank", rel: "noopener noreferrer",
+              href: "https://wa.me/?text=" + encodeURIComponent(blockRequest(group.open)), text: "Chiedi il blocco su WhatsApp"
+            }),
+            typeof url === "string" && url.indexOf("https://") === 0
+              ? el("a", { class: "btn", href: url, target: "_blank", rel: "noopener noreferrer", text: "Controlla sul portale di " + group.prop.label })
+              : null));
       }));
   }
 

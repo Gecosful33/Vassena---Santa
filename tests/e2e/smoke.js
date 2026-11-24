@@ -578,6 +578,11 @@ async function main() {
   assert.ok((await page.locator(".months .bar.family.pending").count()) >= 1, "an unprotected period is drawn differently");
   // The nights still to be blocked for the family: this house has some, and says which.
   const todo = await page.locator(".todo").innerText();
+  // The request to the manager, ready for WhatsApp: the owner's own words, with whole periods as its dates.
+  const ask = new URL(await page.locator(".todo a[data-key^='ask:']").first().getAttribute("href"));
+  assert.equal(ask.origin + ask.pathname, "https://wa.me/");
+  assert.match(ask.searchParams.get("text"),
+    /^Buongiorno,\nvorremmo bloccare i seguenti periodi per uso famiglia:\n\n(\* dal \d{1,2} [a-zà-ù]+ \d{4} al \d{1,2} [a-zà-ù]+ \d{4}\n)+\nDateci conferma di ricezione,\nGrazie$/);
   assert.match(todo, /Da far bloccare al gestore/);
   assert.match(todo, /Casa Lago\s+.+ → .+ · Famiglia Bianchi/);
   assert.ok(!todo.includes("Famiglia Rossi") && !todo.includes("Casa Mare"));
