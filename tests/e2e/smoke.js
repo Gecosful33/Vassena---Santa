@@ -440,10 +440,10 @@ async function main() {
   await barsFollowTheHouseHours(page);
   const labels = await page.locator(".months .bar .txt").allTextContents();
   assert.ok(labels.some((text) => /ospiti/.test(text)), "guest counts written inside bars");
-  assert.match(await page.textContent(".stays thead"), /Check-indalle 15:00Check-outentro le 11:00/);
+  assert.equal(await page.getByText("Soggiorni e blocchi").count(), 0, "the calendar is not repeated as a table");
   assert.equal(await page.locator(".day.today").count(), 1);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 3); // guests to come, stays and monthly statistics of the house
+  await tablesKeepTheirShape(page, 2); // guests to come and monthly statistics of the house
 
   // The card of the house says who is there and who is coming next: no free periods, no blocked dates.
   const card = await page.locator(".house").innerText();
@@ -463,7 +463,7 @@ async function main() {
   await allGuests.click();
   assert.ok((await guestRows.count()) > 4, "the whole list on request");
   assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "guests:mare", "focus stays on the toggle");
-  await tablesKeepTheirShape(page, 3);
+  await tablesKeepTheirShape(page, 2);
   await page.locator('[data-key="guests:mare"]').click();
   assert.equal(await guestRows.count(), 4);
 
@@ -593,7 +593,7 @@ async function main() {
   await page.waitForFunction(() => /Uso famiglia: Famiglia Bianchi \(da far bloccare al gestore\)/.test(document.querySelector(".tip").textContent));
   assert.match(await figures(page).innerText(), /Casa Lago · anno \d{4}/);
   assert.equal(await page.locator(".tile").count(), 6);
-  await tablesKeepTheirShape(page, 3);
+  await tablesKeepTheirShape(page, 2);
   await noSidewaysScroll(page);
   await shot(page, "06-second-house-desktop");
 
@@ -719,7 +719,7 @@ async function main() {
   assert.ok(band.box.height >= 120 && band.box.height <= 180 && band.box.bottom <= band.head.top, "a band above the name");
   assert.equal(await page.locator(".seg img.thumb").count(), 2);
   await noSidewaysScroll(page);
-  await tablesKeepTheirShape(page, 3);
+  await tablesKeepTheirShape(page, 2);
   // On the dark surface the same two hues are lighter, and the text on a solid bar is dark.
   const darkColours = await page.evaluate(() => {
     const shade = (selector, property) => getComputedStyle(document.querySelector(selector))[property];
@@ -739,20 +739,20 @@ async function main() {
   await barsFollowTheHouseHours(page);
   // Phones come in many widths and with fonts of their own, some wider than this
   // machine's. On none of them may the page scroll sideways: a table too wide for its
-  // card scrolls inside its own box. From 390px up the guests and stays tables do not
-  // need even that. (At 360 and 375px the stays table once pushed the page sideways,
+  // card scrolls inside its own box. From 390px up the guests table does not
+  // need even that. (At 360 and 375px a table of stays, since removed, once pushed the page sideways,
   // unnoticed because only 390px was looked at.)
   const boxed = ".scroll > table.rows:not(.kpi)";
   for (const house of ["Casa Lago", "Casa Mare"]) {
     await showHouse(page, house);
-    assert.equal(await page.locator(boxed).count(), 2, "guests and stays tables sit in a box that scrolls on its own");
+    assert.equal(await page.locator(boxed).count(), 1, "the guests table sits in a box that scrolls on its own");
     for (const width of [320, 344, 360, 375, 412, 430, 390]) {
       await page.setViewportSize({ width, height: 844 });
       await page.waitForTimeout(150);
       await noSidewaysScroll(page, `at ${width}px (${house})`);
       const cramped = await page.evaluate((selector) => [...document.querySelectorAll(selector)]
         .filter((table) => table.parentElement.scrollWidth > table.parentElement.clientWidth).length, boxed);
-      if (width >= 390) assert.equal(cramped, 0, `at ${width}px a guests or stays table of ${house} needs sideways scrolling`);
+      if (width >= 390) assert.equal(cramped, 0, `at ${width}px the guests table of ${house} needs sideways scrolling`);
     }
     // The monthly statistics have too many columns for a phone, but only just: whole
     // euros and headings that wrap keep the sideways scrolling short. (With two decimals

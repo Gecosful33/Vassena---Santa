@@ -166,7 +166,7 @@ button, input { font: inherit; color: inherit; }
 /* ---------- page frame ---------- */
 .shell { max-width: 1120px; margin: 0 auto; padding: 16px 16px 48px; display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
 /* Grid items default to min-width:auto, which would let a wide table stretch the page. */
-.shell > *, .houses > *, .stays > *, .kpi-tables > *, .months > * { min-width: 0; }
+.shell > *, .houses > *, .kpi-tables > *, .months > * { min-width: 0; }
 @media (min-width: 720px) { .shell { padding: 28px 24px 64px; gap: 24px; } }
 .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 12px; }
 .top > div { min-width: 0; }
@@ -218,7 +218,6 @@ button, input { font: inherit; color: inherit; }
 .rows .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; padding-right: 16px; }
 .rows .num:last-child { padding-right: 0; }
 .rows .date { white-space: nowrap; }
-.rows tr.year th { padding-top: 14px; font-size: 12px; font-weight: 650; color: var(--text-secondary); }
 .rows .state { display: inline-flex; align-items: flex-start; gap: 6px; }
 /* Second lines give way first: they wrap when the screen is narrow or the device's font is
    wide, so that dates and numbers stay whole and the table stays inside the page. */
@@ -403,10 +402,6 @@ button, input { font: inherit; color: inherit; }
 .btn.danger { color: var(--critical); }
 .btn.danger.armed { background: var(--critical); border-color: transparent; color: #ffffff; }
 
-/* ---------- stays ---------- */
-.stays { display: grid; gap: 24px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); }
-.stays h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
-.stays h3 .swatch { width: 12px; height: 12px; border-radius: 4px; }
 
 /* ---------- owner area ---------- */
 .tiles { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 4px; }
