@@ -5,13 +5,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import html
+import io
 import json
 import re
 from pathlib import Path
 from typing import Any, Mapping
 
 import requests
-from PIL import Image, ImageDraw
 
 WEB_DIR = Path(__file__).parent / "web"
 SCRIPTS = ("crypto.js", "logic.js", "store.js", "app.js")
@@ -75,6 +75,9 @@ def render_page(envelope: Mapping[str, Any], *, title: str) -> str:
     replacements = {
         "__CSP__": html.escape(csp, quote=True),
         "__TITLE__": html.escape(title, quote=True),
+        "__SHORT__": html.escape(SHORT_NAME, quote=True),
+        "__THEME__": _colours("--page")[0],
+        "__THEME_DARK__": _colours("--page")[-1],
         "__CSS__": css,
         "__ENVELOPE__": data,
         "__SCRIPT__": script,
@@ -117,48 +120,76 @@ def fetch_published_envelope(site_url: str, *, timeout: float = 20.0) -> dict[st
     return extract_envelope(response.text)
 
 
-ICON_BACKGROUND, ICON_ROOF, ICON_WALL, ICON_DOOR = "#eb6834", "#ffffff", "#ffffff", "#6250d6"
+SHORT_NAME = "Case"  # under the icon, where there is room for a word
+# The pictures the site is installed with, by file and by side in pixels. The last is the one
+# an iPhone asks for by name; the others are those the manifest lists.
+ICONS = {"icon-192.png": 192, "icon-512.png": 512, "apple-touch-icon.png": 180}
+_LISTED_ICONS = ("icon-192.png", "icon-512.png")
+KEPT_OFFLINE = ["./", "manifest.webmanifest", *ICONS]  # what sw.js keeps for when there is no connection
 
 
-def icon(size: int) -> Image.Image:
-    """The picture the page has on a phone's home screen: a house, drawn here so that no file is kept."""
+def _colours(name: str) -> list[str]:
+    """The values the stylesheet gives a colour, the light scheme's first: the page's palette is written there alone."""
+    found = re.findall(rf"{re.escape(name)}:\s*(#[0-9a-fA-F]{{6}})\s*;", _read("style.css"))
+    if not found:
+        raise SiteError(f"the stylesheet no longer defines {name}")
+    return found
+
+
+def icon(size: int) -> bytes:
+    """The picture the page has on a phone's home screen, as a PNG: a house, in the colours of the two houses.
+
+    Drawn here, so that no image file is kept in the repository.
+    """
+    from PIL import Image, ImageDraw  # only the job that writes the site draws anything
+
     scale = 4  # drawn large and reduced, for smooth edges
-    side = size * scale
-    image = Image.new("RGB", (side, side), ICON_BACKGROUND)
+    image = Image.new("RGB", (size * scale, size * scale), _colours("--series-2")[0])
     draw = ImageDraw.Draw(image)
-    u = side / 100
-    draw.polygon([(50 * u, 22 * u), (82 * u, 50 * u), (18 * u, 50 * u)], fill=ICON_ROOF)
-    draw.rectangle([27 * u, 48 * u, 73 * u, 78 * u], fill=ICON_WALL)
-    draw.rectangle([44 * u, 58 * u, 56 * u, 78 * u], fill=ICON_DOOR)
-    return image.resize((size, size), Image.LANCZOS)
+    u = size * scale / 100
+    draw.polygon([(50 * u, 22 * u), (82 * u, 50 * u), (18 * u, 50 * u)], fill="#ffffff")
+    draw.rectangle([27 * u, 48 * u, 73 * u, 78 * u], fill="#ffffff")
+    draw.rectangle([44 * u, 58 * u, 56 * u, 78 * u], fill=_colours("--series-1")[0])
+    drawn = io.BytesIO()
+    image.resize((size, size), Image.LANCZOS).save(drawn, "PNG")
+    return drawn.getvalue()
 
 
 def manifest(title: str) -> dict[str, Any]:
     """What a phone needs to keep the page on its home screen and open it like an app, without the browser's bars."""
+    page = _colours("--page")[0]
     return {
         "name": title,
-        "short_name": "Case",
+        "short_name": SHORT_NAME,
         "lang": "it",
         "start_url": "./",
         "scope": "./",
         "display": "standalone",
-        "background_color": "#f9f9f7",
-        "theme_color": "#f9f9f7",
+        "background_color": page,
+        "theme_color": page,
         "icons": [
-            {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-            {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
+            {"src": name, "sizes": f"{ICONS[name]}x{ICONS[name]}", "type": "image/png", "purpose": "any"}
+            for name in _LISTED_ICONS
         ],
     }
 
 
-def write_site(out_dir: str | Path, page: str, *, title: str = "Calendario case") -> Path:
+def worker() -> str:
+    """sw.js, told which files to keep: the list is this module's, so that it cannot name a file the site lacks."""
+    files = json.dumps(KEPT_OFFLINE)
+    kept = "casecal-" + hashlib.sha256(files.encode("utf-8")).hexdigest()[:8]  # a new list is a new store
+    return _read("sw.js").replace("__FILES__", files).replace("__KEPT__", kept)
+
+
+def write_site(out_dir: str | Path, page: str, *, title: str) -> Path:
+    """Write the page and what goes with it; ``title`` is the name the page was rendered with."""
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_text(page, encoding="utf-8", newline="\n")
     # Nothing here is private: a name, and a drawing of a house.
     (out / "manifest.webmanifest").write_text(json.dumps(manifest(title), ensure_ascii=False, indent=1), encoding="utf-8")
-    (out / "sw.js").write_text(_read("sw.js"), encoding="utf-8", newline="\n")
-    for name, size in (("icon-192.png", 192), ("icon-512.png", 512), ("apple-touch-icon.png", 180)):
-        icon(size).save(out / name, "PNG", optimize=True)
+    (out / "sw.js").write_text(worker(), encoding="utf-8", newline="\n")
+    for name, size in ICONS.items():
+        (out / name).write_bytes(icon(size))
     (out / "robots.txt").write_text("User-agent: *\nDisallow: /\n", encoding="utf-8")
     return out / "index.html"

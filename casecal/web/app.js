@@ -105,6 +105,10 @@
   function dateOf(day) { return new Date(day * L.DAY_MS); }
   function sameYear(day) { return L.parts(day).y === L.parts(state.today).y; }
   function dayLabel(day) { return (sameYear(day) ? F.day : F.dayYear).format(dateOf(day)); }
+  /** The first day of a stay, beside its last: a year the last day will say is not said twice. */
+  function startLabel(stay) {
+    return L.parts(stay.start).y === L.parts(stay.end).y ? F.day.format(dateOf(stay.start)) : dayLabel(stay.start);
+  }
   function shortLabel(day) { return (sameYear(day) ? F.short : F.shortYear).format(dateOf(day)); }
   function nights(n) { return n === 1 ? "1 notte" : F.int.format(n) + " notti"; }
   /** "gennaio" -> "Gennaio": Italian writes month names small, a table's first column does not. */
@@ -911,13 +915,10 @@
    * the houses are known there is one more, for the profit and loss of all of them.
    */
   function houseTabs() {
-    var withPnl = pnlSheets().length > 0;
-    if (state.props.length < 2 && !withPnl) return null;
-    var options = state.props.map(function (prop) {
-      return { id: prop.id, label: prop.label, index: prop.index, photo: prop.photo };
-    });
-    if (withPnl) options.push({ id: PNL, label: "P&L" });
-    return el("div", null, segmented("house", withPnl ? "Vista" : "Casa", options, state.pnl ? PNL : state.house, showView));
+    var options = views();
+    if (options.length < 2) return null;
+    var withPnl = options[options.length - 1].id === PNL;
+    return el("div", null, segmented("house", withPnl ? "Vista" : "Casa", options, currentView(), showView));
   }
 
   /** Show a house, or the profit and loss. */
@@ -932,10 +933,14 @@
 
   /** The views the tabs lead to, in their order: the houses, then the profit and loss if there is one. */
   function views() {
-    var ids = state.props.map(function (prop) { return prop.id; });
-    if (pnlSheets().length) ids.push(PNL);
-    return ids;
+    var all = state.props.map(function (prop) {
+      return { id: prop.id, label: prop.label, index: prop.index, photo: prop.photo };
+    });
+    if (pnlSheets().length) all.push({ id: PNL, label: "P&L" });
+    return all;
   }
+
+  function currentView() { return state.pnl ? PNL : state.house; }
 
   /* A finger drawn across the page turns to the next view, as it would the pages of an app:
    * to the left for the one after, to the right for the one before. Not at the ends, not while
@@ -960,17 +965,16 @@
   root.addEventListener("touchend", function (event) {
     var begun = stroke, touch = event.changedTouches[0];
     stroke = null;
-    if (!begun || !touch || sheet) return;
+    if (!begun || !touch) return;
     var across = touch.clientX - begun.x, down = touch.clientY - begun.y;
     // Long, quick and level: anything else is a scroll, or a tap that slipped.
     if (Math.abs(across) < 70 || Math.abs(across) < 2.5 * Math.abs(down) || Date.now() - begun.at > 700) return;
-    var all = views(), next = all.indexOf(state.pnl ? PNL : state.house) + (across < 0 ? 1 : -1);
-    if (all.length < 2 || next < 0 || next >= all.length) return;
+    var all = views().map(function (view) { return view.id; });
+    var next = all.indexOf(currentView()) + (across < 0 ? 1 : -1);
+    if (next < 0 || next >= all.length) return;
     showView(all[next]);
     window.scrollTo(0, 0);
   }, { passive: true });
-
-  root.addEventListener("touchcancel", function () { stroke = null; }, { passive: true });
 
   /** How far away a check-in is, in words. */
   function inDaysLabel(days) {
@@ -1021,10 +1025,8 @@
         // The soonest arrival also says how far away it is; guests already there say so.
         var when = guest.current ? "in casa ora" : guest === next ? inDaysLabel(guest.inDays) : null;
         return el("tr", { class: guest.current ? "current" : null },
-          // Next year's stays say their year once, on the day they end: twice, the row is too
-          // wide for a phone.
-          el("td", { class: "date" }, L.parts(stay.start).y === L.parts(stay.end).y ? F.day.format(dateOf(stay.start)) : dayLabel(stay.start),
-            when ? el("span", { class: "sub", text: when }) : null),
+          // The year once, on the day the stay ends: twice, the row is too wide for a phone.
+          el("td", { class: "date" }, startLabel(stay), when ? el("span", { class: "sub", text: when }) : null),
           el("td", { class: "date", text: dayLabel(stay.end) }),
           el("td", { class: "num", text: F.int.format(stay.end - stay.start) }),
           withDetails ? el("td", null, stay.channel || (known ? guestsLabel(stay.guests) : ""),
@@ -1189,7 +1191,8 @@
           (segment.cutLeft ? " cut-l" : run.joinLeft ? " join-l" : "") +
           (segment.cutRight ? " cut-r" : run.joinRight ? " join-r" : "") + (over ? " past" : ""),
         "data-stay": "family:" + run.entries.map(function (entry) { return entry.id; }).join("+"),
-        "data-from": String(Math.floor(run.from + 1e-9)), "data-to": String(Math.floor(run.to + 1e-9))
+        "data-from": String(Math.floor(run.from + 1e-9)), "data-to": String(Math.floor(run.to + 1e-9)),
+        title: full + suffix // a piece too short for words still says whose it is
       }, el("b", { class: "tag", text: prop.badge }), el("span", { class: "txt" }));
       // Longest first; the first that fits is written (see fitLabels).
       bar.labels = [full + suffix, full, short + suffix, short].filter(function (label, index, all) {

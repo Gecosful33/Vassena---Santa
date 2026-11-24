@@ -1,10 +1,13 @@
 import base64
 import hashlib
 import html
+import io
+import json
 import re
 from datetime import datetime, timezone
 
 import pytest
+from PIL import Image
 
 from casecal import site
 from casecal.crypto import build_envelope, open_envelope, site_salt
@@ -215,25 +218,9 @@ def test_a_page_without_envelope_yields_nothing():
 
 def test_the_written_site_can_be_read_back_and_opened(built, tmp_path):
     snapshot, _, page = built
-    index = write_site(tmp_path / "out", page)
+    index = write_site(tmp_path / "out", page, title="Calendario case")
     assert index.name == "index.html"
     assert (tmp_path / "out" / "robots.txt").read_text() == "User-agent: *\nDisallow: /\n"
-    # What a phone needs to keep the page on its home screen like an app: a name and an icon, nothing private.
-    import json as _json
-    from PIL import Image as _Image
-    declared = _json.loads((tmp_path / "out" / "manifest.webmanifest").read_text(encoding="utf-8"))
-    assert declared["display"] == "standalone" and declared["start_url"] == "./" and declared["name"] == "Calendario case"
-    for entry in declared["icons"] + [{"src": "apple-touch-icon.png", "sizes": "180x180"}]:
-        with _Image.open(tmp_path / "out" / entry["src"]) as drawn:
-            assert drawn.format == "PNG" and "x".join(map(str, drawn.size)) == entry["sizes"]
-    assert 'rel="manifest" href="manifest.webmanifest"' in page and 'rel="apple-touch-icon"' in page
-    assert "manifest-src 'self'" in _csp(page) and "default-src 'none'" in _csp(page)
-    # The worker that keeps the page for when there is no connection: a file of the site's own, and
-    # every file it keeps is one the site publishes.
-    worker = (tmp_path / "out" / "sw.js").read_text(encoding="utf-8")
-    assert "worker-src 'self'" in _csp(page) and 'register("sw.js")' in page
-    for kept in re.search(r"var FILES = \[(.*?)\];", worker).group(1).replace('"', "").split(", "):
-        assert kept == "./" or (tmp_path / "out" / kept).is_file()
     envelope = extract_envelope(index.read_text(encoding="utf-8"))
     family, owner = open_envelope(envelope, passphrase=DEMO_PASSPHRASE)
     assert family == snapshot.family_payload()
@@ -266,3 +253,34 @@ def test_fetching_a_published_page(monkeypatch, built):
 
     monkeypatch.setattr(site.requests, "get", offline)
     assert site.fetch_published_envelope("https://example.github.io/repo") is None
+
+
+def test_the_site_can_be_kept_on_a_phone_like_an_app(built, tmp_path):
+    _, _, page = built
+    out = tmp_path / "out"
+    write_site(out, page, title="Calendario case")
+    # A name and an icon, nothing private; the colours are the stylesheet's own.
+    declared = json.loads((out / "manifest.webmanifest").read_text(encoding="utf-8"))
+    assert declared["display"] == "standalone" and declared["start_url"] == "./"
+    assert (declared["name"], declared["short_name"]) == ("Calendario case", site.SHORT_NAME)
+    light, dark = site._colours("--page")
+    assert declared["theme_color"] == declared["background_color"] == light != dark
+    assert f'content="{light}" media="(prefers-color-scheme: light)"' in page
+    assert f'content="{dark}" media="(prefers-color-scheme: dark)"' in page
+    assert {entry["src"] for entry in declared["icons"]} < set(site.ICONS)
+    for name, size in site.ICONS.items():
+        with Image.open(io.BytesIO((out / name).read_bytes())) as drawn:
+            assert drawn.format == "PNG" and drawn.size == (size, size)
+    assert 'rel="manifest" href="manifest.webmanifest"' in page and 'rel="apple-touch-icon" href="apple-touch-icon.png"' in page
+    assert "manifest-src 'self'" in _csp(page) and "default-src 'none'" in _csp(page)
+
+
+def test_the_worker_keeps_for_offline_use_only_files_the_site_publishes(built, tmp_path):
+    _, _, page = built
+    out = tmp_path / "out"
+    write_site(out, page, title="Calendario case")
+    worker = (out / "sw.js").read_text(encoding="utf-8")
+    assert "worker-src 'self'" in _csp(page) and 'register("sw.js")' in page
+    assert "__" not in worker and f"var FILES = {json.dumps(site.KEPT_OFFLINE)};" in worker
+    for kept in site.KEPT_OFFLINE:
+        assert kept == "./" or (out / kept).is_file()
