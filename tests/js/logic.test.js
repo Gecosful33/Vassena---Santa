@@ -808,3 +808,14 @@ test("a year's result needs every house read for the whole of that year", () => 
   assert.deepEqual(L.coveredYears([missing]), []);
   assert.deepEqual(L.coveredYears([]), []);
 });
+
+test("a year without a sheet of its own borrows the costs of the latest one before it", () => {
+  const sheets = L.costSheets([
+    { year: 2028, lines: [{ label: "IMU", amounts: { casa: 120000 } }] },
+    { year: 2026, lines: [{ label: "IMU", amounts: { casa: 100000 } }] },
+  ]);
+  const used = (year) => L.sheetFor(sheets, year).year;
+  assert.deepEqual([2026, 2027, 2028, 2029, 2035].map(used), [2026, 2026, 2028, 2028, 2028]);
+  assert.equal(used(2025), 2026); // before them all: the first there is
+  assert.equal(L.sheetFor([], 2026), null);
+});

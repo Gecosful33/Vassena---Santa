@@ -656,14 +656,16 @@ async function main() {
   await noSidewaysScroll(page);
   await shot(page, "06b-pnl-desktop");
   // Another year of the workbook: its own costs, against that year's bookings.
-  const pnlYears = await pnl.locator(".seg input[name=pnl-year] + span").allInnerTexts();
+  // The year is chosen from a list that drops down: every year the portals are read for.
+  const pnlYears = await pnl.locator("select#pnl-year option").allInnerTexts();
   assert.equal(pnlYears.length, 2);
   assert.ok((await pnl.locator("figcaption").innerText()).endsWith(pnlYears[0]));
-  await pnl.locator(".seg label", { hasText: pnlYears[1] }).click();
+  await pnl.locator("select#pnl-year").selectOption(pnlYears[1]);
   await page.waitForFunction((year) => document.querySelector(".pnl figcaption").textContent.endsWith(year), pnlYears[1]);
   const nextYear = await readStatement(page);
   assert.ok(nextYear.rows["Totale spese"][2] > rows["Totale spese"][2], "the next year's sheet has costs of its own");
-  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "pnl-year:" + pnlYears[1]);
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute("data-key")), "pnl-year");
+  assert.equal(await pnl.locator("select#pnl-year").inputValue(), pnlYears[1]);
   // The page opens on a house: the P&L is a place to go to, not where a device starts from.
   await page.reload();
   await page.waitForSelector(".shell");

@@ -1639,10 +1639,6 @@
   }
 
   /** "2026", "2026 e 2027", "2026, 2027 e 2028". */
-  function yearList(years) {
-    return years.length < 2 ? years.join("") : years.slice(0, -1).join(", ") + " e " + years[years.length - 1];
-  }
-
   /** The year's profit and loss of the houses: what came in, what they cost, what is left. */
   function pnlSection() {
     var byId = {};
@@ -1650,29 +1646,34 @@
     var props = state.props.filter(function (prop) { return !prop.missing && byId[prop.id] && !byId[prop.id].missing; });
     // A year's income is known only while the portals are read for it (see coveredYears).
     var readFor = L.coveredYears(props);
+    // Every year the portals are read for can be chosen: one the workbook has no sheet for
+    // yet is set against the costs of the latest sheet before it (see L.sheetFor).
     var written = pnlSheets();
-    var sheets = written.filter(function (candidate) { return readFor.indexOf(candidate.year) >= 0; });
-    var years = sheets.map(function (candidate) { return candidate.year; });
+    var years = written.length ? readFor : [];
     var current = L.parts(state.today).y;
     if (years.indexOf(state.pnlYear) < 0) state.pnlYear = years.indexOf(current) >= 0 ? current : years[years.length - 1];
     var year = state.pnlYear;
-    var sheet = sheets.filter(function (candidate) { return candidate.year === year; })[0];
+    var sheet = years.length ? L.sheetFor(written, year) : null;
+    var chooser = null;
+    if (years.length > 1) {
+      chooser = el("select", {
+        class: "input year", id: "pnl-year", "data-key": "pnl-year", "aria-label": "Anno",
+        onchange: function () { state.pnlYear = Number(chooser.value); render("pnl-year"); }
+      }, years.map(function (y) {
+        var option = el("option", { value: String(y), text: String(y) });
+        option.selected = y === year;
+        return option;
+      }));
+    }
     var section = el("section", { class: "card pnl" },
-      el("div", { class: "section-head" },
-        el("h2", { text: "P&L · conto economico" }),
-        years.length > 1 ? segmented("pnl-year", "Anno", years.map(function (y) { return { id: y, label: String(y) }; }), year,
-          function (id, key) { state.pnlYear = id; render(key); }) : null));
+      el("div", { class: "section-head" }, el("h2", { text: "P&L · conto economico" }), chooser));
     if (!props.length) {
       append(section, el("p", { class: "empty", text: "Nessun dato dei portali disponibile: il conto economico non si può calcolare." }));
       return section;
     }
     if (!sheet) {
-      var have = yearList(written.map(function (candidate) { return candidate.year; }));
-      append(section, el("p", { class: "empty", text: readFor.length
-        ? "Il conto economico si calcola per gli anni letti dai portali dei gestori (" + yearList(readFor) + "), " +
-          "ma il file delle spese ha solo " + (written.length === 1 ? "il foglio " : "i fogli ") + have +
-          ". Aggiungi al file un foglio che abbia per nome l'anno."
-        : "I dati dei portali non coprono un anno intero: il conto economico non si può calcolare." }));
+      append(section, el("p", { class: "empty",
+        text: "I dati dei portali non coprono un anno intero: il conto economico non si può calcolare." }));
       return section;
     }
     var result = L.profitAndLoss(props.map(function (prop) { return byId[prop.id]; }), sheet, year);
@@ -1687,7 +1688,8 @@
     append(section, [
       // The income of a year still running is what is booked so far; the costs are the whole year's.
       el("p", { class: "hint", text: "Entrate: prenotazioni acquisite finora per il " + year + ", dai portali dei gestori " +
-        "(aggiornate ogni notte). Spese: importi annui dal foglio delle spese" + revised + "." }),
+        "(aggiornate ogni notte). Spese: importi annui dal foglio delle spese" +
+        (sheet.year === year ? "" : " del " + sheet.year + ", in attesa del foglio " + year) + revised + "." }),
       left.length ? el("p", { class: "hint left-out" }, icon("unknown"),
         el("span", { text: (left.length === 1 ? "Non compresa: " : "Non comprese: ") + left.join(", ") +
           " (dati del portale non disponibili)." })) : null,

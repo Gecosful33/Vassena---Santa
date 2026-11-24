@@ -376,6 +376,14 @@ prenotazioni a importo zero.
 
 ### Come si legge il P&L
 
+L'anno si sceglie dal menù a tendina accanto al titolo: ci sono tutti gli anni che il
+job legge per intero dai portali (quello in corso e i successivi, secondo `years_ahead`).
+Le entrate sono sempre quelle dell'anno scelto. Le spese sono quelle del foglio di
+quell'anno; se il file non ha ancora un foglio per quell'anno valgono quelle del foglio
+più recente fra i precedenti, e la pagina lo dice («foglio delle spese del 2026, in
+attesa del foglio 2027»). Per dare a un anno spese proprie basta aggiungere al file un
+foglio con quell'anno per nome.
+
 - **Entrate**: quelle dei portali per l'anno, le stesse dell'area proprietà. Per l'anno
   in corso sono le prenotazioni acquisite finora, quindi crescono durante l'anno; le
   spese sono invece gli importi dell'anno intero.
