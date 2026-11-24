@@ -1021,7 +1021,10 @@
         // The soonest arrival also says how far away it is; guests already there say so.
         var when = guest.current ? "in casa ora" : guest === next ? inDaysLabel(guest.inDays) : null;
         return el("tr", { class: guest.current ? "current" : null },
-          el("td", { class: "date" }, dayLabel(stay.start), when ? el("span", { class: "sub", text: when }) : null),
+          // Next year's stays say their year once, on the day they end: twice, the row is too
+          // wide for a phone.
+          el("td", { class: "date" }, L.parts(stay.start).y === L.parts(stay.end).y ? F.day.format(dateOf(stay.start)) : dayLabel(stay.start),
+            when ? el("span", { class: "sub", text: when }) : null),
           el("td", { class: "date", text: dayLabel(stay.end) }),
           el("td", { class: "num", text: F.int.format(stay.end - stay.start) }),
           withDetails ? el("td", null, stay.channel || (known ? guestsLabel(stay.guests) : ""),
