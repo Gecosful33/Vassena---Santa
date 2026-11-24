@@ -658,6 +658,18 @@ var CaseCalLogic = (function () {
   }
 
   /**
+   * The costs to set against a year's income: that year's own sheet, or, for a year the
+   * workbook has no sheet for yet, the latest one before it (the first there is, for a
+   * year before them all). Running costs change little from a year to the next, so a new
+   * year can be looked at before anyone has written its sheet.
+   * `sheets` are in order of year (see costSheets). Returns the sheet, or null if there is none.
+   */
+  function sheetFor(sheets, year) {
+    var written = sheets.filter(function (sheet) { return sheet.year <= year; });
+    return written.length ? written[written.length - 1] : sheets[0] || null;
+  }
+
+  /**
    * The years every one of these houses is read for from its portal, whole: 1 January
    * to 31 December. Only for those can a year's income be set against its costs: a
    * year the portals are no longer (or not yet) read for would show an income of nothing.
@@ -754,7 +766,7 @@ var CaseCalLogic = (function () {
     firstOpenDay: firstOpenDay, draftPeriod: draftPeriod,
     kpiYears: kpiYears, yearRows: yearRows, columnTotals: columnTotals, houseYear: houseYear, combine: combine,
     roleIndex: roleIndex, axisScale: axisScale,
-    costSheets: costSheets, coveredYears: coveredYears, profitAndLoss: profitAndLoss
+    costSheets: costSheets, sheetFor: sheetFor, coveredYears: coveredYears, profitAndLoss: profitAndLoss
   };
 })();
 if (typeof module !== "undefined" && module.exports) { module.exports = CaseCalLogic; }
