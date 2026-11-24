@@ -1561,7 +1561,7 @@
       row("Notti vendute", null, each(nightsCount, "nights")),
       row("Ricavi lordi", "notti × ADR", each(whole, "gross_cents")),
       // What stays with the manager, the channels and the tax office, and its share of the gross.
-      row("Trattenute", "lordo − netto; % del lordo", columns.map(function (column) {
+      row("Trattenute", "Tasse + Gestione Agenzia", columns.map(function (column) {
         return { text: whole(column.withheld_cents), sub: column.withheld_ratio === null ? null : pct(column.withheld_ratio) };
       })),
       row("Ricavi netti", "netto proprietario", each(whole, "net_cents"), true)
