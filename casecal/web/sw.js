@@ -7,8 +7,10 @@
  */
 "use strict";
 
-var KEPT = "casecal-1";
-var FILES = ["./", "manifest.webmanifest", "icon-192.png", "icon-512.png", "apple-touch-icon.png"];
+// Both are filled in when the site is written (see site.py): the files it publishes, and a
+// name for the store that changes when that list does.
+var KEPT = "__KEPT__";
+var FILES = __FILES__;
 
 self.addEventListener("install", function (event) {
   event.waitUntil(caches.open(KEPT).then(function (cache) { return cache.addAll(FILES); }));
@@ -29,7 +31,7 @@ self.addEventListener("fetch", function (event) {
   var request = event.request;
   if (request.method !== "GET" || new URL(request.url).origin !== self.location.origin) return;
   event.respondWith(
-    fetch(request, { cache: "no-store" }).then(function (response) {
+    fetch(request, { cache: "no-cache" }).then(function (response) {
       if (response.ok) {
         var copy = response.clone();
         caches.open(KEPT).then(function (cache) { cache.put(request, copy); });
