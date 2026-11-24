@@ -365,7 +365,8 @@ button, input { font: inherit; color: inherit; }
 .todo { display: grid; gap: 10px; padding: 12px; margin-bottom: 14px; border-radius: 12px; background: var(--surface-2); }
 .todo h3 { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 650; }
 .todo h4 { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 650; }
-.todo .btn { margin-top: 8px; }
+.todo .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.todo .actions .btn { text-decoration: none; }
 .plain { list-style: none; margin: 4px 0 0; padding: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
 
 /* ---------- sheets (day details, entry form) ---------- */

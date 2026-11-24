@@ -335,6 +335,12 @@ portali e non manda richieste a nessuno. Nell'area proprietà di ciascuna casa l
 «Da far bloccare al gestore» raccoglie le notti ancora scoperte, con un link al portale
 per controllare.
 
+Sotto l'elenco di ciascuna casa il pulsante «Chiedi il blocco su WhatsApp» apre WhatsApp
+con la richiesta già scritta (i periodi di quella casa ancora da bloccare, dal giorno di
+arrivo a quello di partenza) e fa scegliere la chat o il gruppo a cui mandarla. La
+pagina non conosce numeri e non invia nulla da sé: il messaggio parte solo quando lo si
+invia da WhatsApp.
+
 **Più famiglie nella stessa casa.** Due periodi possono condividere delle notti nella
 stessa casa: il modulo lo dice prima di salvare («In quelle date c'è anche…») e nel
 calendario le notti in comune sono una sola barra con entrambi i nomi. La pagina
