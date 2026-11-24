@@ -334,7 +334,8 @@ portali e non manda richieste a nessuno. Nell'area proprietà di ciascuna casa l
 «Da far bloccare al gestore» raccoglie le notti ancora scoperte, con un link al portale
 per controllare.
 
-Sotto l'elenco di ciascuna casa il pulsante «Chiedi il blocco su WhatsApp» apre WhatsApp
+In «Chi usa la casa», accanto ad «Aggiungi un periodo», quando la casa ha periodi ancora
+da bloccare compaiono «Controlla sul portale» e «Chiedi il blocco su WhatsApp», che apre WhatsApp
 con la richiesta già scritta (i periodi di quella casa ancora da bloccare, dal giorno di
 arrivo a quello di partenza) e fa scegliere la chat o il gruppo a cui mandarla. La
 pagina non conosce numeri e non invia nulla da sé: il messaggio parte solo quando lo si
@@ -350,7 +351,8 @@ modificano lo stesso periodo negli stessi istanti vale l'ultima scrittura.
 **Avviso al proprietario.** Per non dover aprire la pagina per accorgersene, il job
 notturno tiene aperta una issue «Date da far bloccare al gestore», assegnata al
 proprietario del repository: GitHub lo notifica, per mail con le impostazioni
-predefinite dell'account. Succede quando un periodo
+predefinite dell'account. Il job parte anche da solo, entro un paio di minuti, ogni
+volta che qualcuno inserisce un periodo: la mail non aspetta la notte. Succede quando un periodo
 entra in «Da far bloccare al gestore» o in «Ci sono ospiti in quelle date» (appena
 inserito, perché il gestore ha riaperto la vendita, o perché è arrivata una
 prenotazione); il lunedì arriva un promemoria finché restano periodi non bloccati che
