@@ -73,6 +73,9 @@ def test_the_repository_configuration_holds_no_secrets():
         ('[[property]]\nid = "a"\nlabel = "A"\nenv = "lower"\n', "env non valido"),
         ('[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n[[property]]\nid = "a"\nlabel = "B"\nenv = "B"\n', "duplicato"),
         ('years_ahead = 9\n[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n', "years_ahead"),
+        ('years_back = 9\n[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n', "years_back"),
+        ('years_back = "uno"\n[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n', "years_back"),
+        ('first_year = 26\n[[property]]\nid = "a"\nlabel = "A"\nenv = "A"\n', "first_year"),
         ("this is not toml", "TOML"),
     ],
 )

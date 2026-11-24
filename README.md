@@ -377,7 +377,8 @@ prenotazioni a importo zero.
 ### Come si legge il P&L
 
 L'anno si sceglie dal menù a tendina accanto al titolo: ci sono tutti gli anni che il
-job legge per intero dai portali (quello in corso e i successivi, secondo `years_ahead`).
+job legge per intero dai portali: quello in corso, i successivi secondo `years_ahead` e
+quelli già chiusi secondo `years_back`, mai prima di `first_year` (in `properties.toml`).
 Le entrate sono sempre quelle dell'anno scelto. Le spese sono quelle del foglio di
 quell'anno; se il file non ha ancora un foglio per quell'anno valgono quelle del foglio
 più recente fra i precedenti, e la pagina lo dice («foglio delle spese del 2026, in

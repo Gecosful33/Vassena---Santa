@@ -10,6 +10,12 @@ timezone = "Europe/Rome"
 # Anni futuri da leggere oltre a quello corrente.
 years_ahead = 1
 
+# Anni già chiusi da continuare a leggere, perché i loro conti (statistiche e P&L)
+# restino nella pagina; e il primo anno da leggere in assoluto. Con questi valori nel
+# 2027 la pagina mostra ancora il 2026, e non cerca mai dati precedenti al 2026.
+years_back = 1
+first_year = 2026
+
 # Orari della casa: gli ospiti entrano dalle check_in ed escono entro le check_out.
 # Nel calendario ogni soggiorno inizia e finisce esattamente a queste ore. Valgono per
 # tutte le case; una casa con orari diversi li ridefinisce nel proprio blocco [[property]].

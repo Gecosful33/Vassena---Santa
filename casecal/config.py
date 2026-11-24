@@ -85,6 +85,10 @@ class Config:
     site_id: str = "casecal"
     note: str | None = None
     years_ahead: int = 1
+    # Years already over that are still read, so that their closed accounts stay on the
+    # page; and the first year worth reading at all, before which the houses were not let.
+    years_back: int = 0
+    first_year: int | None = None
     # The private bucket that holds the workbook of costs and the photos, for when
     # COSTS_R2_URL says which account it is and nothing else. A name is no secret:
     # reading the bucket takes the account and the keys.
@@ -154,6 +158,12 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
     years_ahead = int(raw.get("years_ahead", 1))
     if not 0 <= years_ahead <= 3:
         raise ConfigError(f"{path}: years_ahead deve essere tra 0 e 3")
+    years_back = raw.get("years_back", 0)
+    if isinstance(years_back, bool) or not isinstance(years_back, int) or not 0 <= years_back <= 5:
+        raise ConfigError(f"{path}: years_back deve essere un numero intero tra 0 e 5")
+    first_year = raw.get("first_year")
+    if first_year is not None and (isinstance(first_year, bool) or not isinstance(first_year, int) or not 2000 <= first_year <= 2100):
+        raise ConfigError(f"{path}: first_year deve essere un anno, es. 2026")
     bucket = raw.get("bucket")
     if bucket is not None and not (isinstance(bucket, str) and _BUCKET_RE.match(bucket)):
         raise ConfigError(
@@ -167,6 +177,8 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
         site_id=str(raw.get("site_id") or os.environ.get("GITHUB_REPOSITORY") or "casecal"),
         note=raw.get("note") or None,
         years_ahead=years_ahead,
+        years_back=years_back,
+        first_year=first_year,
         bucket=bucket,
         properties=tuple(properties),
     )
