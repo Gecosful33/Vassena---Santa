@@ -93,7 +93,10 @@ def describe_error(exc: BaseException) -> str:
 
 def target_years(config: Config, now: datetime) -> list[int]:
     this_year = now.astimezone(ZoneInfo(config.timezone)).year
-    return [this_year + offset for offset in range(config.years_ahead + 1)]
+    # The years gone by that are still read come first, never earlier than the first year
+    # worth reading; the year under way and those ahead are always read.
+    earliest = max(this_year - config.years_back, min(config.first_year or this_year - config.years_back, this_year))
+    return list(range(earliest, this_year + config.years_ahead + 1))
 
 
 def collect(

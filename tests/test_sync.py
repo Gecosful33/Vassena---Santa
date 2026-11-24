@@ -183,6 +183,25 @@ def test_years_follow_the_houses_time_zone():
     assert target_years(Config(years_ahead=0, properties=CONFIG.properties), NOW) == [2026]
 
 
+def test_years_gone_by_are_still_read_when_asked_but_none_before_the_first():
+    def years(when, **settings):
+        return target_years(Config(properties=CONFIG.properties, **settings), when)
+
+    in_2027 = datetime(2027, 3, 1, tzinfo=timezone.utc)
+    in_2029 = datetime(2029, 3, 1, tzinfo=timezone.utc)
+    # The year just closed stays on the page, with its accounts.
+    assert years(in_2027, years_back=1) == [2026, 2027, 2028]
+    assert years(in_2029, years_back=2) == [2027, 2028, 2029, 2030]
+    # The houses were first let in 2026: nothing is asked of the portals for the years before.
+    assert years(NOW, years_back=1, first_year=2026) == [2026, 2027]
+    assert years(in_2027, years_back=1, first_year=2026) == [2026, 2027, 2028]
+    assert years(in_2029, years_back=1, first_year=2026) == [2028, 2029, 2030]
+    assert years(in_2029, years_back=5, first_year=2026) == [2026, 2027, 2028, 2029, 2030]
+    # A first year still to come changes nothing: the year under way is always read.
+    assert years(NOW, years_back=1, first_year=2030) == [2026, 2027]
+    assert years(NOW, first_year=2020) == [2026, 2027]
+
+
 def test_publish_writes_a_page_its_one_passphrase_opens(tmp_path):
     snapshot = Snapshot(generated_at=NOW, properties=[house("santa"), house("vassena")])
     index = publish(snapshot, passphrase=FAMILY, site_id="test/site", out_dir=tmp_path)
