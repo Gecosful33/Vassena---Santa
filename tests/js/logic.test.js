@@ -819,3 +819,41 @@ test("a year without a sheet of its own borrows the costs of the latest one befo
   assert.equal(used(2025), 2026); // before them all: the first there is
   assert.equal(L.sheetFor([], 2026), null);
 });
+
+test("the control panel shows only what has the shape the job gives it", () => {
+  const now = Date.parse("2026-11-25T11:00:00Z");
+  const status = {
+    checked_at: "2026-11-25T10:43:00Z",
+    houses: {
+      vassena: {
+        wifi: { label: "Eolo", state: "online" },
+        climate: [
+          { label: "Piano sopra", app: "Daikin Onecta", state: "on", mode: "heat", units: 3, running: 1, room: 19.5, target: 21 },
+          { label: "Piano sotto", state: "<b>", mode: "plasma" },
+          { state: "on" },
+        ],
+        lake: {
+          name: "Lago di Como", attention_cm: 100, alarm_cm: 120, level_cm: 104.5, read_at: "2026-11-25T10:00:00Z",
+          stage: "normal", trend: "rising", source: "laghi.net",
+          history: [["2026-11-25T04:00:00Z", 99.1], ["2026-11-25T09:00:00Z", 103], ["2026-11-25T10:00:00Z", 104.5]],
+        },
+      },
+      santa: {},
+    },
+  };
+  const panel = L.panelOf(status, "vassena", now);
+  assert.equal(panel.stale, false);
+  assert.deepEqual(panel.wifi, { label: "Eolo", state: "online" });
+  assert.equal(panel.climate.length, 2); // a row without a name is not shown
+  assert.deepEqual([panel.climate[1].state, panel.climate[1].mode], ["unknown", null]);
+  // The level says attention whatever the stage beside it says.
+  assert.equal(panel.lake.stage, "attention");
+  assert.ok(Math.abs(panel.lake.change.cm - 5.4) < 1e-9 && panel.lake.change.hours === 6);
+  assert.ok(Math.abs(panel.lake.toAlarm - 15.5) < 1e-9);
+  assert.equal(L.panelOf(status, "santa", now), null);
+  assert.equal(L.panelOf(null, "vassena", now), null);
+  assert.equal(L.panelOf(status, "vassena", now + 4 * 3600000).stale, true);
+  const unread = L.panelOf({ checked_at: "x", houses: { a: { lake: { attention_cm: 100, alarm_cm: 120, stage: "alarm" } } } }, "a", now);
+  assert.deepEqual([unread.lake.level, unread.lake.stage, unread.stale], [null, null, true]);
+  assert.equal(L.lakeChange([["2026-11-25T09:30:00Z", 1], ["2026-11-25T10:00:00Z", 2]], 6), null); // too close to tell
+});

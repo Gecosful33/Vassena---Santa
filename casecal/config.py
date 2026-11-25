@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
+from .devices import DEVICE_SECRETS, SOURCES
+
 DEFAULT_CONFIG = "properties.toml"
 _ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,30}$")
 _ENV_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,30}$")
@@ -36,13 +38,33 @@ DEFAULT_CHECK_OUT = "11:00"
 # COSTS_R2_URL may hold the Account ID alone when ``properties.toml`` names the bucket.
 COSTS_SECRETS = ("COSTS_R2_URL", "COSTS_R2_ACCESS_KEY_ID", "COSTS_R2_SECRET_ACCESS_KEY")
 OPTIONAL_SECRETS = (
-    "FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS", "OWNER_PASSPHRASE", *COSTS_SECRETS
+    "FAMILY_LOG_TOKEN", "OLD_FAMILY_PASSPHRASE", "FAMILY_GROUPS", "OWNER_PASSPHRASE", *COSTS_SECRETS,
+    *DEVICE_SECRETS,  # the accounts of the heating and cooling apps, for the control panel
 )
 GROUP_LIMIT, GROUP_NAME_LIMIT = 8, 40
 
 
 class ConfigError(ValueError):
     """The configuration file or the environment is incomplete."""
+
+
+@dataclass(frozen=True)
+class ClimateConfig:
+    """Heating or cooling of a house, as one of the makers' apps sees it."""
+
+    source: str  # which app: a key of ``devices.SOURCES``
+    label: str  # what the panel calls it, e.g. "Piano sopra"
+    # Where one account holds units of more than one house: only those whose name contains this.
+    only: str | None = None
+
+
+@dataclass(frozen=True)
+class LakeConfig:
+    """The lake a house stands on, and the levels (cm above its zero) worth a warning."""
+
+    name: str  # as laghi.net calls it, e.g. "Lago di Como"
+    attention_cm: float
+    alarm_cm: float
 
 
 @dataclass(frozen=True)
@@ -61,6 +83,11 @@ class PropertyConfig:
     # in view is, for a photo that has to be cut to the page's shape.
     photo: str | None = None
     photo_focus: int = 50
+    # The control panel (see status.py): the apps that run heating and cooling, what the
+    # house's WiFi is called, and the lake to watch. A house may have none of them.
+    climate: tuple[ClimateConfig, ...] = ()
+    wifi: str | None = None
+    lake: LakeConfig | None = None
 
     def secret_names(self) -> tuple[str, str, str]:
         return (f"{self.env}_KB_URL", f"{self.env}_KB_USER", f"{self.env}_KB_PASS")
@@ -120,6 +147,43 @@ def _photo(path, where: str, entry: Mapping) -> tuple[str | None, int]:
     return (name.strip() if name else None), focus
 
 
+def _panel(path, where: str, entry: Mapping) -> tuple[tuple[ClimateConfig, ...], str | None, LakeConfig | None]:
+    """What the control panel shows of a house: its heating and cooling, its WiFi's name, its lake."""
+    climate: list[ClimateConfig] = []
+    listed = entry.get("climate", [])
+    if not isinstance(listed, list) or len(listed) > 6:
+        raise ConfigError(f"{path}: {where}climate deve essere un elenco (al più 6 voci)")
+    for item in listed:
+        source = item.get("source") if isinstance(item, dict) else None
+        label = item.get("label") if isinstance(item, dict) else None
+        only = item.get("only") if isinstance(item, dict) else None
+        if source not in SOURCES:
+            raise ConfigError(f"{path}: {where}climate: source deve essere uno tra {', '.join(sorted(SOURCES))}")
+        if not isinstance(label, str) or not label.strip() or len(label) > 40:
+            raise ConfigError(f"{path}: {where}climate: label è il nome mostrato nel pannello (al più 40 caratteri)")
+        if only is not None and (not isinstance(only, str) or not only.strip() or len(only) > 60):
+            raise ConfigError(f"{path}: {where}climate: only deve essere una parte del nome delle unità")
+        climate.append(ClimateConfig(source=source, label=label.strip(), only=only.strip() if only else None))
+    wifi = entry.get("wifi")
+    if wifi is not None and (not isinstance(wifi, str) or not wifi.strip() or len(wifi) > 40):
+        raise ConfigError(f"{path}: {where}wifi deve essere il nome della connessione (al più 40 caratteri)")
+    lake = None
+    raw = entry.get("lake")
+    if raw is not None:
+        def level(name: str) -> float:
+            value = raw.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not -100 <= value <= 500:
+                raise ConfigError(f"{path}: {where}lake: {name} deve essere un'altezza in centimetri")
+            return float(value)
+
+        if not isinstance(raw, dict) or not isinstance(raw.get("name"), str) or not raw["name"].strip():
+            raise ConfigError(f"{path}: {where}lake deve avere name, attention_cm e alarm_cm")
+        lake = LakeConfig(name=raw["name"].strip(), attention_cm=level("attention_cm"), alarm_cm=level("alarm_cm"))
+        if not lake.attention_cm < lake.alarm_cm:
+            raise ConfigError(f"{path}: {where}lake: attention_cm deve essere più bassa di alarm_cm")
+    return tuple(climate), (wifi.strip() if wifi else None), lake
+
+
 def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
     try:
         raw = tomllib.loads(Path(path).read_text(encoding="utf-8"))
@@ -141,8 +205,10 @@ def load_config(path: str | os.PathLike[str] = DEFAULT_CONFIG) -> Config:
         if not isinstance(own_use, bool):
             raise ConfigError(f"{path}: [[property]] {identity['id']}: unpaid_is_own_use deve essere true o false")
         photo, focus = _photo(path, f"[[property]] {identity['id']}: ", entry)
+        climate, wifi, lake = _panel(path, f"[[property]] {identity['id']}: ", entry)
         prop = PropertyConfig(
-            **identity, check_in=hours[0], check_out=hours[1], unpaid_is_own_use=own_use, photo=photo, photo_focus=focus
+            **identity, check_in=hours[0], check_out=hours[1], unpaid_is_own_use=own_use, photo=photo, photo_focus=focus,
+            climate=climate, wifi=wifi, lake=lake,
         )
         if not _ID_RE.match(prop.id):
             raise ConfigError(f"{path}: id non valido {prop.id!r} (minuscole, cifre, trattini)")

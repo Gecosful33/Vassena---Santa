@@ -21,8 +21,10 @@ from .config import (
 from .crypto import PassphraseError, check_passphrase, generate_passphrase
 from .errors import SyncAborted
 from .familylog import token_problem
+from .status import StatusReport, collect_status
 from .sync import (
     PreviousPage,
+    alert_lake,
     alert_owner,
     collect,
     costs_state,
@@ -30,6 +32,7 @@ from .sync import (
     photos_state,
     previous_from_site,
     publish,
+    refresh_status,
 )
 
 EXIT_OK, EXIT_ABORTED, EXIT_CONFIG = 0, 1, 2
@@ -40,6 +43,7 @@ ALERT_WORDS = {
     "new": "nuovi periodi segnalati",
     "remind": "promemoria inviato",
     "close": "segnalazione chiusa",
+    "worse": "soglia di allarme segnalata",
 }
 
 
@@ -77,6 +81,31 @@ def _load_settings(config_path: str):
     forbidden = [value for cred in credentials.values() for value in (cred.username, cred.password)]
     check_passphrase(passphrase, forbidden=forbidden)
     return config, credentials, passphrase
+
+
+def _say_status(report: StatusReport) -> None:
+    """The control panel's readings, for a public log: which sources, never what they said."""
+    if report.read:
+        _say(f"pannello di controllo: letti {', '.join(report.read)}")
+    if report.off:
+        _say(f"pannello di controllo: non configurati {', '.join(report.off)} (secret assenti)")
+    for note in report.warnings:
+        _problem("warning", f"pannello: {note}")
+
+
+def _lake_alert(status, previous) -> None:
+    action, problem = alert_lake(
+        status,
+        previous,
+        token=os.environ.get("ALERTS_TOKEN", "").strip() or None,
+        repository=os.environ.get("GITHUB_REPOSITORY", "").strip() or None,
+        owner=os.environ.get("GITHUB_REPOSITORY_OWNER", "").strip() or None,
+        api=os.environ.get("GITHUB_API_URL", "").strip() or "https://api.github.com",
+    )
+    if problem:
+        _problem("warning", f"pannello: {problem}")
+    if action and action != "nothing":
+        _say(f"avviso del lago: {ALERT_WORDS[action]}")
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -197,6 +226,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
         report.warnings["avvisi"] = [alert_problem]
     if alert:
         _say(f"avviso al proprietario: {ALERT_WORDS[alert]}")
+    # The control panel: WiFi, heating and cooling, the lake. Its faults are told, and shown
+    # in the panel itself; they never make the night's run a failed one.
+    previous_status = load_previous().status if any(p.climate or p.lake for p in config.properties) else None
+    snapshot.status, status_report = collect_status(config, os.environ, previous=previous_status, now=now)
+    _say_status(status_report)
+    _lake_alert(snapshot.status, previous_status)
     for prop_id in report.fresh:
         _say(f"{prop_id}: letto")
     for prop_id, notes in report.warnings.items():
@@ -214,6 +249,77 @@ def cmd_sync(args: argparse.Namespace) -> int:
     )
     _set_output("degraded", "true" if report.degraded else "false")
     _say(f"pagina scritta in {page}" + (" (parziale)" if report.degraded else ""))
+    return EXIT_OK
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """Between one night and the next: the page online again, with its control panel read afresh."""
+    # The managers' portals are not visited, so their secrets are not asked for.
+    config = load_config(args.config)
+    passphrase = os.environ.get("FAMILY_PASSPHRASE", "")
+    if not passphrase.strip():
+        raise ConfigError("secret mancanti: FAMILY_PASSPHRASE")
+    check_passphrase(passphrase)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    page, report, status, previous = refresh_status(
+        config,
+        os.environ,
+        site_url=os.environ.get("SITE_URL", "").strip() or None,
+        passphrase=passphrase,
+        out_dir=args.out,
+        now=now,
+    )
+    _say_status(report)
+    _lake_alert(status, previous)
+    _say(f"pagina scritta in {page} (solo il pannello di controllo è cambiato)")
+    return EXIT_OK
+
+
+def cmd_lake(args: argparse.Namespace) -> int:
+    """Read the lake and say what was read: public data, and the quickest way to see that the reading works."""
+    from .lake import LakeError, fetch_reading
+
+    try:
+        reading = fetch_reading(args.name)
+    except LakeError as exc:
+        _problem("error", f"lago: {exc}")
+        return EXIT_ABORTED
+    _say(f"{reading.name}: {reading.level_cm:+.1f} cm sullo zero idrometrico, letto alle "
+         f"{reading.read_at:%Y-%m-%d %H:%M} UTC, tendenza {reading.trend or 'non indicata'}")
+    return EXIT_OK
+
+
+def cmd_daikin_login(args: argparse.Namespace) -> int:
+    """Once, at a keyboard: allow this program to read the Daikin units, and get the first pass."""
+    import requests
+
+    from .devices import DeviceError, daikin_authorize_url, daikin_grant
+
+    client_id = os.environ.get("DAIKIN_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("DAIKIN_CLIENT_SECRET", "").strip()
+    if not client_id or not client_secret:
+        raise ConfigError("servono DAIKIN_CLIENT_ID e DAIKIN_CLIENT_SECRET (dal portale sviluppatori Daikin)")
+    print("1. Apri questo indirizzo nel browser, entra con l'account dell'app Onecta e acconsenti:\n")
+    print("   " + daikin_authorize_url(client_id, args.redirect_uri) + "\n")
+    print("2. Il browser viene mandato a un indirizzo che contiene «code=…».")
+    pasted = input("   Incolla qui quell'indirizzo intero (o il solo codice): ").strip()
+    code = pasted
+    if "code=" in pasted:
+        from urllib.parse import parse_qs, urlsplit
+
+        code = (parse_qs(urlsplit(pasted).query).get("code") or [""])[0]
+    if not code:
+        raise ConfigError("nessun codice nell'indirizzo incollato")
+    try:
+        granted = daikin_grant(
+            requests.Session(), client_id, client_secret,
+            grant_type="authorization_code", code=code, redirect_uri=args.redirect_uri,
+        )
+    except DeviceError as exc:
+        _problem("error", str(exc))
+        return EXIT_ABORTED
+    print("\n3. Salva questo valore nel secret DAIKIN_REFRESH_TOKEN (vale una volta: non usarlo altrove):\n")
+    print("   " + str(granted["refresh_token"]))
     return EXIT_OK
 
 
@@ -251,6 +357,19 @@ def build_parser() -> argparse.ArgumentParser:
     check = commands.add_parser("check", help="verifica configurazione e secret, senza rete")
     check.add_argument("--config", default=DEFAULT_CONFIG)
     check.set_defaults(handler=cmd_check)
+
+    status = commands.add_parser("status", help="aggiorna il solo pannello di controllo della pagina già online")
+    status.add_argument("--out", default="dist")
+    status.add_argument("--config", default=DEFAULT_CONFIG)
+    status.set_defaults(handler=cmd_status)
+
+    lake = commands.add_parser("lake", help="legge il livello di un lago da laghi.net e lo stampa")
+    lake.add_argument("--name", default="Lago di Como")
+    lake.set_defaults(handler=cmd_lake)
+
+    daikin = commands.add_parser("daikin-login", help="prima autorizzazione di Daikin Onecta (una volta, a mano)")
+    daikin.add_argument("--redirect-uri", required=True, help="il Redirect URI registrato nel portale Daikin (https://…)")
+    daikin.set_defaults(handler=cmd_daikin_login)
 
     demo = commands.add_parser("demo", help="costruisce una pagina di prova con dati inventati")
     demo.add_argument("--out", default="dist-demo")

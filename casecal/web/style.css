@@ -188,6 +188,24 @@ button, input { font: inherit; color: inherit; }
 .banner .ico { margin-top: 2px; }
 
 /* ---------- availability ---------- */
+/* The control panel: a few readings side by side, each with a dot that repeats its words. */
+.panel-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 2px 12px; }
+.panel-head h2 { font-size: 17px; font-weight: 650; }
+.panel-head .meta { color: var(--text-muted); font-size: 13px; }
+.panel .banner { margin-top: 12px; }
+.gauges { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); margin-top: 12px; }
+.gauge { padding: 12px; border-radius: 12px; background: var(--surface-2); min-width: 0; }
+.gauge .label { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+.gauge .label .sub { margin-left: 6px; font-weight: 400; letter-spacing: 0; text-transform: none; }
+.gauge .value { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; font-size: 18px; font-weight: 650; overflow-wrap: anywhere; }
+.gauge .dot { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--axis); transform: translateY(-1px); }
+.gauge.good .dot { background: var(--good); }
+.gauge.warn .dot { background: var(--warning); }
+.gauge.bad .dot { background: var(--critical); }
+.gauge.idle .dot { background: transparent; box-shadow: inset 0 0 0 2px var(--text-muted); }
+.gauge.unknown .value { color: var(--text-secondary); }
+.gauge.bad .value { color: var(--critical); }
+.gauge .note { margin-top: 2px; font-size: 12px; color: var(--text-muted); }
 .houses { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); }
 /* The photo of the house: a band across the top of its card on a phone, a panel beside
    the guests on a wide screen. Either way the picture is cropped around its middle. */

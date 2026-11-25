@@ -206,6 +206,9 @@ class GitHubIssues:
     def comment(self, number: int, body: str, *, what: str) -> None:
         self._json("POST", f"/issues/{number}/comments", what, json={"body": body})
 
+    def set_issue_body(self, number: int, body: str, *, what: str) -> None:
+        self._json("PATCH", f"/issues/{number}", what, json={"body": body})
+
     def close_issue(self, number: int, *, what: str) -> None:
         self._json("PATCH", f"/issues/{number}", what, json={"state": "closed", "state_reason": "completed"})
 

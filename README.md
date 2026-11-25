@@ -245,6 +245,62 @@ senza foto, e non è un errore; per togliere una foto basta cancellare il file d
 bucket. Se una notte una foto non si scarica o non è un'immagine, la pagina tiene
 quella già pubblicata e il job lo segnala.
 
+### 9. Il pannello di controllo (facoltativo)
+
+In testa a ogni casa la pagina può mostrare un pannello con tre cose: se il **WiFi** è
+online, se **riscaldamento e raffrescamento** sono accesi e, per la casa sul lago, quanto
+è **alto il lago**. Cosa mostra ogni casa lo dice `properties.toml` (`wifi`, `climate`,
+`lake`); gli account delle app stanno nei secret. Una fonte senza i suoi secret resta
+«Non rilevato», e non è un errore.
+
+Il pannello si aggiorna **ogni ora** con il workflow «Pannello di controllo»
+(`.github/workflows/status.yml`), che ripubblica la pagina già online cambiando solo il
+pannello: i portali dei gestori li legge, come prima, soltanto il job notturno.
+
+**Il lago** non richiede nessun secret: il livello (altezza idrometrica, in centimetri
+sopra lo zero di Malgrate) è un dato pubblico, letto da [laghi.net](https://laghi.net/Page/laghi)
+con la stessa richiesta che fa la loro pagina. Il pannello mostra due dati: l'altezza e
+la tendenza (con la variazione nelle ultime ore e il margine alla soglia). Sopra
+`attention_cm` il pannello avvisa, sopra `alarm_cm` è allarme: in entrambi i casi il job
+apre la segnalazione «Lago alto: controllare la barca», assegnata al proprietario, e
+GitHub gli manda una mail; la segnalazione si chiude da sola quando il lago scende. Per
+provare la lettura: `python -m casecal lake`.
+
+**Il clima** si legge dai servizi delle app, in sola lettura (il programma non può
+accendere né spegnere nulla):
+
+| App | Secret | Note |
+|---|---|---|
+| Airzone Cloud | `AIRZONE_USER`, `AIRZONE_PASS` | email e password dell'app |
+| myVAILLANT | `VAILLANT_USER`, `VAILLANT_PASS` | email e password dell'app; `VAILLANT_COUNTRY` solo se l'account non è italiano (es. `germany`) |
+| Daikin Onecta | `DAIKIN_CLIENT_ID`, `DAIKIN_CLIENT_SECRET`, `DAIKIN_REFRESH_TOKEN` | vedi sotto |
+
+Conviene creare nelle app un utente invitato, dedicato al calendario, invece di usare
+l'account principale. Airzone e Vaillant non pubblicano un'interfaccia per questo uso:
+il programma fa ciò che fa l'app, e un loro cambiamento può interrompere la lettura
+finché il codice non viene adeguato (il pannello mostra «Non rilevato»).
+
+Daikin ha un'interfaccia ufficiale, che richiede un'autorizzazione fatta una volta a mano:
+
+1. su <https://developer.cloud.daikineurope.com> entra **con lo stesso account dell'app
+   Onecta**, crea un'applicazione e indica un Redirect URI `https://` qualsiasi che
+   controlli (non `localhost`); annota Client ID e Client Secret;
+2. sul tuo computer: `DAIKIN_CLIENT_ID=… DAIKIN_CLIENT_SECRET=… python -m casecal daikin-login --redirect-uri https://…`
+   e segui le istruzioni (apri l'indirizzo, acconsenti, incolla l'indirizzo a cui torni);
+3. salva i tre valori nei secret.
+
+L'autorizzazione di Daikin si rinnova a ogni lettura e quella precedente smette di
+valere: il job conserva l'ultima, cifrata con la password della pagina, nel testo della
+issue «Stato del pannello di controllo (dati cifrati: non modificare)». Se la catena si
+interrompe (issue cancellata, password della pagina cambiata, un anno senza letture) il
+job lo dice nei log e va rifatto il punto 2. Daikin concede 200 richieste al giorno: una
+lettura all'ora ne usa 24.
+
+**Il WiFi** non ha una fonte propria (né il router con SIM né Eolo espongono uno stato
+leggibile da fuori): è «Online» se almeno un'unità del clima della casa è vista dal suo
+servizio, «Offline» se nessuna lo è (WiFi o corrente assenti), «Non rilevato» se nessuna
+app ha risposto.
+
 ## Cosa mostra la pagina
 
 Con la password si vede tutto. In alto c'è una scheda per casa, con la sua foto se è
@@ -253,6 +309,7 @@ ricorda l'ultima scelta.
 
 | Sezione | Contenuto, per la casa scelta |
 |---|---|
+| Pannello di controllo | WiFi, riscaldamento/raffrescamento e, sul lago, livello e tendenza (passo 9) |
 | Prossimi ospiti | chi c'è ora e i prossimi arrivi |
 | Calendario | soggiorni degli ospiti, date bloccate e periodi della famiglia |
 | «Chi usa la casa» | periodi della famiglia, inseribili e modificabili da tutti |

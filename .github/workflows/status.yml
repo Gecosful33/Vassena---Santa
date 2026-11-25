@@ -1,0 +1,89 @@
+name: Pannello di controllo
+
+# Tra una notte e l'altra: rilegge WiFi, riscaldamento/raffrescamento e livello del lago, e
+# ripubblica la pagina già online cambiando solo il pannello di controllo. I portali dei
+# gestori non vengono toccati: quelli li legge il job notturno.
+#
+# Questo repository è pubblico, quindi lo sono anche questi log. Il programma stampa solo
+# quali fonti ha letto e il tipo di errore: mai nomi, temperature o stati. Fa eccezione il
+# livello del lago, che è un dato pubblico.
+
+on:
+  schedule:
+    # Ogni ora, lontano dall'ora piena e dal job notturno delle 02:17 UTC.
+    - cron: "43 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+# Lo stesso gruppo del job notturno: i due non pubblicano mai insieme, e l'autorizzazione
+# di Daikin (che si rinnova a ogni uso) non viene mai usata da due esecuzioni alla volta.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  status:
+    name: Leggi il pannello e pubblica
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: write      # deploy su GitHub Pages
+      id-token: write   # richiesto da actions/deploy-pages
+      issues: write     # la segnalazione «Lago alto» e lo stato del pannello di controllo
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url || steps.redeployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Dipendenze
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+
+      - name: Indirizzo del sito
+        id: pages
+        uses: actions/configure-pages@v6
+
+      # Se la pagina online non si può rileggere il passo fallisce e non si pubblica nulla.
+      - name: Leggi il pannello e ricostruisci la pagina
+        env:
+          FAMILY_PASSPHRASE: ${{ secrets.FAMILY_PASSPHRASE }}
+          AIRZONE_USER: ${{ secrets.AIRZONE_USER }}
+          AIRZONE_PASS: ${{ secrets.AIRZONE_PASS }}
+          VAILLANT_USER: ${{ secrets.VAILLANT_USER }}
+          VAILLANT_PASS: ${{ secrets.VAILLANT_PASS }}
+          VAILLANT_COUNTRY: ${{ secrets.VAILLANT_COUNTRY }}
+          DAIKIN_CLIENT_ID: ${{ secrets.DAIKIN_CLIENT_ID }}
+          DAIKIN_CLIENT_SECRET: ${{ secrets.DAIKIN_CLIENT_SECRET }}
+          DAIKIN_REFRESH_TOKEN: ${{ secrets.DAIKIN_REFRESH_TOKEN }}
+          ALERTS_TOKEN: ${{ github.token }}
+          SITE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python -m casecal status --out dist
+
+      - name: Carica la pagina
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+      - name: Pubblica
+        id: deployment
+        uses: actions/deploy-pages@v5
+        continue-on-error: true
+
+      - name: Attendi prima di riprovare
+        if: steps.deployment.outcome == 'failure'
+        run: sleep 30
+
+      - name: Pubblica (secondo tentativo)
+        id: redeployment
+        if: steps.deployment.outcome == 'failure'
+        uses: actions/deploy-pages@v5

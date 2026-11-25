@@ -1018,6 +1018,91 @@
     window.scrollTo(0, 0);
   }, { passive: true });
 
+  /* ---------- the control panel: WiFi, heating and cooling, the lake ---------- */
+
+  var F1 = new Intl.NumberFormat(IT, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+  var F1S = new Intl.NumberFormat(IT, { minimumFractionDigits: 1, maximumFractionDigits: 1, signDisplay: "exceptZero" });
+  var MODES = { heat: "riscaldamento", cool: "raffrescamento", auto: "automatico", dry: "deumidificazione", fan: "ventilazione" };
+  var TRENDS = { rising: "In aumento", stable: "Stabile", falling: "In diminuzione" };
+
+  /** One reading of the panel: what it is, what it says, and a dot whose colour repeats the words. */
+  function gauge(tone, label, value, note, sub) {
+    return el("div", { class: "gauge " + tone },
+      el("p", { class: "label" }, label, sub ? el("span", { class: "sub", text: sub }) : null),
+      el("p", { class: "value" }, el("i", { class: "dot", "aria-hidden": "true" }), el("span", { text: value })),
+      note ? el("p", { class: "note", text: note }) : null);
+  }
+
+  function degrees(value) { return F1.format(value) + "°"; }
+
+  function climateGauge(row) {
+    var value = "Non rilevato", tone = "unknown", note = "L'app non ha risposto all'ultima lettura.";
+    if (row.state === "offline") {
+      value = "Non raggiungibile"; tone = "bad"; note = "L'unità non è collegata al suo servizio.";
+    } else if (row.state === "off") {
+      value = "Spento"; tone = "idle"; note = row.room !== null ? "In casa " + degrees(row.room) : null;
+    } else if (row.state === "on") {
+      value = "Acceso" + (row.mode ? " · " + MODES[row.mode] : ""); tone = "good";
+      var parts = [];
+      if (row.units > 1) parts.push(row.running + " di " + row.units + " zone");
+      if (row.room !== null) parts.push("in casa " + degrees(row.room));
+      if (row.target !== null) parts.push("impostato " + degrees(row.target));
+      note = parts.length ? capital(parts.join(" · ")) : null;
+    }
+    return gauge(tone, row.label, value, note, row.app);
+  }
+
+  function lakeGauges(lake) {
+    if (lake.level === null) {
+      return [gauge("unknown", "Altezza del lago", "Non rilevata",
+        "Il sito " + (lake.source || "dei laghi") + " non ha dato il livello all'ultima lettura.", lake.name)];
+    }
+    var tone = lake.stage === "alarm" ? "bad" : lake.stage === "attention" ? "warn" : "good";
+    var change = lake.change;
+    var moving = change && Math.abs(change.cm) >= 0.05
+      ? F1S.format(change.cm) + " cm in " + F.int.format(Math.round(change.hours)) + " ore"
+      : change ? "Invariato in " + F.int.format(Math.round(change.hours)) + " ore" : null;
+    return [
+      gauge(tone, "Altezza idrometrica", F1S.format(lake.level) + " cm",
+        "Letta " + stamp(lake.readAt) + (lake.source ? " · " + lake.source : ""), lake.name),
+      gauge(tone, "Tendenza e margine", lake.trend ? TRENDS[lake.trend] : (moving || "Non indicata"),
+        (lake.trend && moving ? moving + " · " : "") + (lake.margin > 0
+          ? "mancano " + F1.format(lake.margin) + " cm all'attenzione (" + F.int.format(lake.attention) + " cm)"
+          : lake.toAlarm > 0 ? "mancano " + F1.format(lake.toAlarm) + " cm all'allarme (" + F.int.format(lake.alarm) + " cm)"
+          : F1.format(-lake.toAlarm) + " cm sopra la soglia di allarme"),
+        "soglie " + F.int.format(lake.attention) + " / " + F.int.format(lake.alarm) + " cm")
+    ];
+  }
+
+  /** Above everything else of a house: is the WiFi up, is the heating on, is the lake high. */
+  function controlPanel() {
+    var prop = visible()[0];
+    var panel = prop ? L.panelOf(state.family.status, prop.id, Date.now()) : null;
+    if (!panel) return null;
+    var lake = panel.lake;
+    var wifi = panel.wifi && gauge(
+      panel.wifi.state === "online" ? "good" : panel.wifi.state === "offline" ? "bad" : "unknown",
+      "WiFi",
+      panel.wifi.state === "online" ? "Online" : panel.wifi.state === "offline" ? "Offline" : "Non rilevato",
+      panel.wifi.state === "online" ? "Le unità del clima sono collegate."
+        : panel.wifi.state === "offline" ? "Nessuna unità del clima è raggiungibile: WiFi o corrente assenti."
+        : "Nessuna app del clima ha risposto all'ultima lettura.",
+      panel.wifi.label);
+    return el("section", { class: "card panel p" + prop.index, "aria-label": "Pannello di controllo di " + prop.label },
+      el("div", { class: "panel-head" },
+        el("h2", { text: "Pannello di controllo" }),
+        el("p", { class: "meta", text: panel.checkedAt === null ? "" : "Rilevato " + stamp(panel.checkedAt) + " · si aggiorna ogni ora" })),
+      lake && (lake.stage === "alarm" || lake.stage === "attention")
+        ? banner(lake.stage === "alarm" ? "critical" : "warning", lake.stage === "alarm" ? "critical" : "warning",
+          lake.stage === "alarm" ? "Lago in allarme." : "Lago alto.",
+          lake.name + " a " + F1S.format(lake.level) + " cm sullo zero idrometrico: controllare l'ormeggio della barca.")
+        : null,
+      panel.stale ? banner("warning", "warning", "Pannello non aggiornato.",
+        "L'ultima lettura è " + (panel.checkedAt === null ? "sconosciuta" : stamp(panel.checkedAt, true)) +
+        ": questi stati possono non essere più veri.") : null,
+      el("div", { class: "gauges" }, wifi, panel.climate.map(climateGauge), lake ? lakeGauges(lake) : null));
+  }
+
   /** How far away a check-in is, in words. */
   function inDaysLabel(days) {
     return days === 0 ? "oggi" : days === 1 ? "domani" : "tra " + F.int.format(days) + " giorni";
@@ -1714,7 +1799,7 @@
     if (state.pnl && !pnlSheets().length) state.pnl = false;
     root.appendChild(el("div", { class: "shell" }, header(), banners(), houseTabs(),
       state.pnl ? pnlSection()
-        : [availability(), calendar(), familySection(), ownerSection(), footer()]));
+        : [controlPanel(), availability(), calendar(), familySection(), ownerSection(), footer()]));
     window.scrollTo(0, scroll);
     fitLabels();
     // Not while a sheet is open: the focus belongs inside it, and it will ask for it back.

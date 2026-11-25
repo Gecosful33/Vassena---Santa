@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw
 from .costs import CostLine, CostSheet
 from .family import FamilyEntry
 from .model import (
+    iso_utc,
     BOOKING,
     CLOSED,
     ROLE_ADR,
@@ -248,6 +249,32 @@ def _demo_photo(lake: bool) -> Photo:
     return Photo(encode(image, 72))
 
 
+def _demo_status(now: datetime) -> dict:
+    """A control panel with a bit of everything: a house that is warm, one with the lake rising."""
+    read_at = now.replace(minute=0, second=0) - timedelta(hours=1)
+    history = [[iso_utc(read_at - timedelta(hours=back)), round(104.5 - 0.9 * back, 1)] for back in range(24, -1, -6)]
+    return {
+        "checked_at": iso_utc(now),
+        "houses": {
+            "mare": {
+                "wifi": {"label": "Router con SIM", "state": "online"},
+                "climate": [{"label": "Riscaldamento", "app": "myVAILLANT", "state": "on", "mode": "heat",
+                             "units": 1, "running": 1, "room": 19.5, "target": 20.0}],
+            },
+            "lago": {
+                "wifi": {"label": "Fibra", "state": "online"},
+                "climate": [
+                    {"label": "Piano sopra", "app": "Daikin Onecta", "state": "off", "units": 3, "running": 0, "room": 17.2},
+                    {"label": "Piano sotto", "app": "Airzone Cloud", "state": "unknown"},
+                ],
+                "lake": {"name": "Lago di Como", "attention_cm": 100.0, "alarm_cm": 120.0, "history": history,
+                         "source": "laghi.net", "level_cm": 104.5, "read_at": iso_utc(read_at), "stage": "attention",
+                         "trend": "rising", "inflow": 412.0, "outflow": 310.5, "fill": 78.4},
+            },
+        },
+    }
+
+
 def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant: str = "ok") -> Snapshot:
     """Two invented houses around ``now``.
 
@@ -304,4 +331,5 @@ def demo_snapshot(now: datetime, *, timezone_name: str = "Europe/Rome", variant:
         log={"kind": "local"},
         costs=_demo_costs(years),
         photos={"mare": _demo_photo(lake=False), "lago": _demo_photo(lake=True)},
+        status=_demo_status(now),
     )

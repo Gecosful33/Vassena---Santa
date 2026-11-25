@@ -378,6 +378,8 @@ class Snapshot:
     costs: list[Any] = field(default_factory=list)
     # A small picture of each house, by house id (see photos.py). A house may have none.
     photos: dict[str, Any] = field(default_factory=dict)
+    # The control panel (see status.py): WiFi, heating and cooling, the lake. None: no panel.
+    status: dict[str, Any] | None = None
 
     def family_payload(self) -> dict[str, Any]:
         return {
@@ -393,6 +395,8 @@ class Snapshot:
             "groups": list(self.groups),
             # With the calendar: a photo says which house this is, nothing about its figures.
             "photos": {house: photo.to_dict() for house, photo in self.photos.items()},
+            # With the calendar too: whoever may go to a house may know whether it is warm.
+            "status": self.status,
         }
 
     def owner_payload(self) -> dict[str, Any]:
