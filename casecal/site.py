@@ -137,21 +137,16 @@ def _colours(name: str) -> list[str]:
 
 
 def icon(size: int) -> bytes:
-    """The picture the page has on a phone's home screen, as a PNG: a house, in the colours of the two houses.
+    """The picture the page has on a phone's home screen, as a PNG: the house, photographed from its garden.
 
-    Drawn here, so that no image file is kept in the repository.
+    Reduced from ``web/icon.jpg``, a square as large as the largest size asked for.
     """
-    from PIL import Image, ImageDraw  # only the job that writes the site draws anything
+    from PIL import Image  # only the job that writes the site draws anything
 
-    scale = 4  # drawn large and reduced, for smooth edges
-    image = Image.new("RGB", (size * scale, size * scale), _colours("--series-2")[0])
-    draw = ImageDraw.Draw(image)
-    u = size * scale / 100
-    draw.polygon([(50 * u, 22 * u), (82 * u, 50 * u), (18 * u, 50 * u)], fill="#ffffff")
-    draw.rectangle([27 * u, 48 * u, 73 * u, 78 * u], fill="#ffffff")
-    draw.rectangle([44 * u, 58 * u, 56 * u, 78 * u], fill=_colours("--series-1")[0])
+    with Image.open(WEB_DIR / "icon.jpg") as photo:
+        image = photo.convert("RGB").resize((size, size), Image.LANCZOS)
     drawn = io.BytesIO()
-    image.resize((size, size), Image.LANCZOS).save(drawn, "PNG")
+    image.save(drawn, "PNG", optimize=True)
     return drawn.getvalue()
 
 
@@ -186,7 +181,7 @@ def write_site(out_dir: str | Path, page: str, *, title: str) -> Path:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     (out / "index.html").write_text(page, encoding="utf-8", newline="\n")
-    # Nothing here is private: a name, and a drawing of a house.
+    # Published as it is, unencrypted: a name, and the photo of the house the icon is made from.
     (out / "manifest.webmanifest").write_text(json.dumps(manifest(title), ensure_ascii=False, indent=1), encoding="utf-8")
     (out / "sw.js").write_text(worker(), encoding="utf-8", newline="\n")
     for name, size in ICONS.items():
