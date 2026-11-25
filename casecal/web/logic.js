@@ -753,7 +753,82 @@ var CaseCalLogic = (function () {
     return { houses: houses, total: column(all, allCosts), lines: lines };
   }
 
+  /* ---------- the control panel ---------- */
+
+  var HOUR_MS = 3600000;
+  var PANEL_STALE_MS = 3 * HOUR_MS; // it is read every hour: three missed, and it is old
+
+  /**
+   * How much the lake moved over about `hours`, from the readings the page carries
+   * (`[[iso time, cm], ...]`): the newest against the one nearest to `hours` before it.
+   * Null where no reading is between half and twice that far back.
+   */
+  function lakeChange(history, hours) {
+    var points = (Array.isArray(history) ? history : []).map(function (item) {
+      return Array.isArray(item) ? { at: Date.parse(item[0]), cm: item[1] } : null;
+    }).filter(function (point) {
+      return point && isFinite(point.at) && typeof point.cm === "number" && isFinite(point.cm);
+    }).sort(function (a, b) { return a.at - b.at; });
+    if (points.length < 2) return null;
+    var last = points[points.length - 1], wanted = last.at - hours * HOUR_MS, best = null;
+    points.slice(0, -1).forEach(function (point) {
+      var back = last.at - point.at;
+      if (back < hours * HOUR_MS / 2 || back > hours * HOUR_MS * 2) return;
+      if (!best || Math.abs(point.at - wanted) < Math.abs(best.at - wanted)) best = point;
+    });
+    return best ? { cm: last.cm - best.cm, hours: (last.at - best.at) / HOUR_MS } : null;
+  }
+
+  /**
+   * What the panel has to show of one house, or null where the house has none. Everything
+   * is checked here: the page draws only what has the shape the job gives it.
+   */
+  function panelOf(status, houseId, nowMs) {
+    var held = status && status.houses && typeof status.houses === "object" ? status.houses[houseId] : null;
+    if (!held || typeof held !== "object") return null;
+    var checked = Date.parse(status.checked_at);
+    function text(value) { return typeof value === "string" && value.trim() ? value.trim().slice(0, 60) : null; }
+    function number(value) { return typeof value === "number" && isFinite(value) ? value : null; }
+    function among(value, allowed) { return allowed.indexOf(value) >= 0 ? value : null; }
+    var panel = {
+      checkedAt: isFinite(checked) ? checked : null,
+      stale: !isFinite(checked) || nowMs - checked > PANEL_STALE_MS,
+      wifi: null, climate: [], lake: null
+    };
+    if (held.wifi && typeof held.wifi === "object") {
+      panel.wifi = { label: text(held.wifi.label), state: among(held.wifi.state, ["online", "offline"]) || "unknown" };
+    }
+    (Array.isArray(held.climate) ? held.climate : []).slice(0, 6).forEach(function (row) {
+      if (!row || typeof row !== "object" || !text(row.label)) return;
+      panel.climate.push({
+        label: text(row.label), app: text(row.app),
+        state: among(row.state, ["on", "off", "offline"]) || "unknown",
+        mode: among(row.mode, ["heat", "cool", "auto", "dry", "fan"]),
+        units: number(row.units), running: number(row.running), room: number(row.room), target: number(row.target)
+      });
+    });
+    var lake = held.lake;
+    if (lake && typeof lake === "object" && number(lake.attention_cm) !== null && number(lake.alarm_cm) !== null) {
+      var level = number(lake.level_cm), readAt = Date.parse(lake.read_at);
+      var known = level !== null && isFinite(readAt);
+      panel.lake = {
+        name: text(lake.name) || "Lago", source: text(lake.source),
+        attention: lake.attention_cm, alarm: lake.alarm_cm,
+        level: known ? level : null, readAt: known ? readAt : null,
+        // The thresholds are judged here too: a level is never shown beside a stage it contradicts.
+        stage: !known ? null : level >= lake.alarm_cm ? "alarm"
+          : level >= lake.attention_cm ? "attention" : among(lake.stage, ["attention", "alarm"]) || "normal",
+        trend: known ? among(lake.trend, ["rising", "stable", "falling"]) : null,
+        change: known ? lakeChange(lake.history, 6) : null,
+        margin: known ? lake.attention_cm - level : null,
+        toAlarm: known ? lake.alarm_cm - level : null
+      };
+    }
+    return panel.wifi || panel.climate.length || panel.lake ? panel : null;
+  }
+
   return {
+    lakeChange: lakeChange, panelOf: panelOf,
     DAY_MS: DAY_MS,
     dayOf: dayOf, dayFromYmd: dayFromYmd, parts: parts, ymd: ymd,
     daysInMonth: daysInMonth, daysInYear: daysInYear, todayInZone: todayInZone,

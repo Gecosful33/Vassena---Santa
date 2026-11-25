@@ -43,7 +43,7 @@ jobs:
       pages: write      # deploy su GitHub Pages
       id-token: write   # richiesto da actions/deploy-pages
       actions: write    # solo per il passo "Mantieni attivo lo schedule"
-      issues: write     # solo per la segnalazione «Date da far bloccare al gestore»
+      issues: write     # le segnalazioni al proprietario e lo stato del pannello di controllo
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url || steps.redeployment.outputs.page_url }}
@@ -97,6 +97,17 @@ jobs:
           COSTS_R2_URL: ${{ secrets.COSTS_R2_URL }}
           COSTS_R2_ACCESS_KEY_ID: ${{ secrets.COSTS_R2_ACCESS_KEY_ID }}
           COSTS_R2_SECRET_ACCESS_KEY: ${{ secrets.COSTS_R2_SECRET_ACCESS_KEY }}
+          # Facoltativi: gli account delle app del clima, per il pannello di controllo (WiFi,
+          # riscaldamento e raffrescamento; vedi README, passo 9). Una app senza i suoi secret
+          # resta semplicemente «non collegata». Il livello del lago non ne richiede.
+          AIRZONE_USER: ${{ secrets.AIRZONE_USER }}
+          AIRZONE_PASS: ${{ secrets.AIRZONE_PASS }}
+          VAILLANT_USER: ${{ secrets.VAILLANT_USER }}
+          VAILLANT_PASS: ${{ secrets.VAILLANT_PASS }}
+          VAILLANT_COUNTRY: ${{ secrets.VAILLANT_COUNTRY }}
+          DAIKIN_CLIENT_ID: ${{ secrets.DAIKIN_CLIENT_ID }}
+          DAIKIN_CLIENT_SECRET: ${{ secrets.DAIKIN_CLIENT_SECRET }}
+          DAIKIN_REFRESH_TOKEN: ${{ secrets.DAIKIN_REFRESH_TOKEN }}
           # Il token del workflow stesso: apre e commenta la segnalazione per il proprietario.
           # Deve scriverla GitHub Actions, non il proprietario: nessuno riceve notifiche di
           # ciò che fa da sé.

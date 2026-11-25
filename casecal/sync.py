@@ -40,7 +40,10 @@ from .model import (
     properties_from_payloads,
 )
 from .photos import FILE_ENDINGS, MAX_SOURCE_BYTES, Photo, PhotoError, photos_from_payload, prepare
+from . import lakealert
+from .model import PAYLOAD_VERSION
 from .site import SiteError, fetch_published_envelope, render_page, write_site
+from .status import StatusReport, collect_status
 
 Fetcher = Callable[[PropertyConfig, PortalCredentials, Sequence[int], datetime], PropertySnapshot]
 
@@ -54,6 +57,7 @@ class PreviousPage:
     log: dict[str, Any] | None = None
     costs: list[CostSheet] = field(default_factory=list)
     photos: dict[str, Photo] = field(default_factory=dict)
+    status: dict[str, Any] | None = None  # the control panel, as last published
 
 
 PreviousLoader = Callable[[], PreviousPage]
@@ -188,6 +192,7 @@ def previous_from_site(
         log=log if isinstance(log, dict) else None,
         costs=sheets_from_payload((owner or {}).get("costs")),
         photos=photos_from_payload(family.get("photos")),
+        status=family.get("status") if isinstance(family.get("status"), dict) else None,
     )
 
 
@@ -490,6 +495,68 @@ def alert_owner(
     except FamilyLogError as exc:
         return None, f"avviso al proprietario non aggiornato ({exc})"
     return outcome.action, None
+
+
+def alert_lake(
+    status: Mapping[str, Any] | None,
+    previous: Mapping[str, Any] | None,
+    *,
+    token: str | None,
+    repository: str | None,
+    owner: str | None,
+    api: str = DEFAULT_API,
+) -> tuple[str | None, str | None]:
+    """Keep the owner's alert about the lake in line with its level (see ``lakealert.py``).
+
+    Returns what was done and, separately, what went wrong.
+    """
+    if not token or not repository or not status:
+        return None, None
+    try:
+        action = lakealert.reconcile(
+            GitHubIssues(token, repository, api=api), owner=owner or "", status=status, previous=previous
+        )
+    except FamilyLogError as exc:
+        return None, f"avviso del lago non aggiornato ({exc})"
+    return action, None
+
+
+def refresh_status(
+    config: Config,
+    environ: Mapping[str, str],
+    *,
+    site_url: str | None,
+    passphrase: str,
+    out_dir: str | Path,
+    now: datetime,
+    collect: Callable[..., tuple[dict[str, Any] | None, StatusReport]] = collect_status,
+) -> tuple[Path, StatusReport, dict[str, Any] | None, dict[str, Any] | None]:
+    """Publish again the page that is online, with nothing changed but its control panel.
+
+    The panel is worth reading far more often than the managers' portals are
+    worth visiting. So between one night and the next the page online is taken
+    as it is, opened, given the panel's fresh readings and closed again: the
+    calendar, the figures and their timestamps are not touched.
+
+    Returns the page written, what the log may say, and the panel now and before.
+    """
+    envelope = fetch_published_envelope(site_url) if site_url else None
+    if envelope is None:
+        raise SyncAborted("pagina online non trovata: il pannello si aggiorna solo su una pagina già pubblicata")
+    try:
+        family, owner = open_envelope(envelope, passphrase=passphrase)
+    except EnvelopeError:
+        family = owner = None
+    if family is None or owner is None or family.get("v") != PAYLOAD_VERSION or family.get("demo"):
+        raise SyncAborted("la pagina online non si apre con la password attuale: la aggiornerà il job notturno")
+    previous = family.get("status") if isinstance(family.get("status"), dict) else None
+    status, report = collect(config, environ, previous=previous, now=now)
+    family["status"] = status
+    title = str(family.get("title") or config.title)
+    fresh = build_envelope(passphrase=passphrase, salt=site_salt(config.site_id), family_payload=family, owner_payload=owner)
+    if open_envelope(fresh, passphrase=passphrase) != (family, owner):
+        raise SiteError("envelope self-check failed")
+    return write_site(out_dir, render_page(fresh, title=title), title=title), report, status, previous
 
 
 def publish(

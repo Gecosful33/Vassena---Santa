@@ -36,12 +36,23 @@ bucket = "vassenasanta"
 # tagliata in orizzontale attorno al punto indicato da `photo_focus`, in percentuale
 # dall'alto (50 = a metà).
 
+# Pannello di controllo (facoltativo, vedi README): in testa a ogni casa dice se il WiFi è
+# online, se riscaldamento e raffrescamento sono accesi e, per la casa sul lago, quanto è
+# alto il lago. `climate` elenca le app che comandano il clima della casa (source: airzone,
+# daikin, vaillant) con il nome da mostrare; gli account stanno nei secret. `wifi` è solo il
+# nome della connessione: che sia online lo dicono le unità del clima, che ci passano
+# attraverso. `lake` è il lago da sorvegliare (dati pubblici di laghi.net) con le due soglie,
+# in centimetri sopra lo zero idrometrico: sopra `attention_cm` il pannello avvisa, sopra
+# `alarm_cm` è allarme; in entrambi i casi il proprietario riceve una mail da GitHub.
+
 [[property]]
 id = "santa"
 label = "Santa"
 env = "SANTA"      # secret: SANTA_KB_URL, SANTA_KB_USER, SANTA_KB_PASS
 photo = "IMG_2835.jpeg"
 photo_focus = 48
+wifi = "TP-Link con SIM"
+climate = [{ source = "vaillant", label = "Riscaldamento" }]
 
 [[property]]
 id = "vassena"
@@ -52,3 +63,10 @@ photo_focus = 26   # la casa è nella parte alta della foto
 # Le prenotazioni che il portale riporta con tutti gli importi a zero sono soggiorni
 # nostri inseriti dal gestore, non ospiti: nel calendario valgono come date bloccate.
 unpaid_is_own_use = true
+wifi = "Eolo"
+climate = [
+  { source = "daikin", label = "Piano sopra" },
+  { source = "airzone", label = "Piano sotto" },
+]
+# La barca è all'ormeggio: zero idrometrico di Malgrate (197,37 m s.l.m.).
+lake = { name = "Lago di Como", attention_cm = 100, alarm_cm = 120 }
