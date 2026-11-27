@@ -1055,21 +1055,24 @@
   function lakeGauges(lake) {
     if (lake.level === null) {
       return [gauge("unknown", "Altezza del lago", "Non rilevata",
-        "Il sito " + (lake.source || "dei laghi") + " non ha dato il livello all'ultima lettura.", lake.name)];
+        "Il sito " + (lake.source || "dei laghi") + " non ha dato il livello all'ultima lettura.")];
     }
     var tone = lake.stage === "alarm" ? "bad" : lake.stage === "attention" ? "warn" : "good";
     var change = lake.change;
     var moving = change && Math.abs(change.cm) >= 0.05
       ? F1S.format(change.cm) + " cm in " + F.int.format(Math.round(change.hours)) + " ore"
       : change ? "Invariato in " + F.int.format(Math.round(change.hours)) + " ore" : null;
+    // One box: level and trend as the value, the thresholds once (in the label), the rest in the note.
+    var parts = [];
+    if (moving) parts.push(moving);
+    parts.push(lake.margin > 0 ? "mancano " + F1.format(lake.margin) + " cm all'attenzione"
+      : lake.toAlarm > 0 ? "mancano " + F1.format(lake.toAlarm) + " cm all'allarme"
+      : F1.format(-lake.toAlarm) + " cm sopra l'allarme");
+    parts.push("letta " + stamp(lake.readAt));
     return [
-      gauge(tone, "Altezza idrometrica", F1S.format(lake.level) + " cm",
-        "Letta " + stamp(lake.readAt) + (lake.source ? " · " + lake.source : ""), lake.name),
-      gauge(tone, "Tendenza e margine", lake.trend ? TRENDS[lake.trend] : (moving || "Non indicata"),
-        (lake.trend && moving ? moving + " · " : "") + (lake.margin > 0
-          ? "mancano " + F1.format(lake.margin) + " cm all'attenzione (" + F.int.format(lake.attention) + " cm)"
-          : lake.toAlarm > 0 ? "mancano " + F1.format(lake.toAlarm) + " cm all'allarme (" + F.int.format(lake.alarm) + " cm)"
-          : F1.format(-lake.toAlarm) + " cm sopra la soglia di allarme"),
+      gauge(tone, "Altezza idrometrica",
+        F1S.format(lake.level) + " cm" + (lake.trend ? " · " + TRENDS[lake.trend] : ""),
+        capital(parts.join(" · ")),
         "soglie " + F.int.format(lake.attention) + " / " + F.int.format(lake.alarm) + " cm")
     ];
   }
