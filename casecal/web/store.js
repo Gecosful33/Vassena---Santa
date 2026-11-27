@@ -5,8 +5,9 @@
  * encrypted page (casecal/familylog.py). Every comment is ciphertext, so GitHub only
  * ever stores what it cannot read. The demo uses the browser's own storage instead.
  *
- * Both stores speak the same two verbs: list(afterId) resolves to the comments newer
- * than the one with that id, oldest first, as [{ id, body }]; append(body) adds one.
+ * Both stores speak the same verbs: list(afterId) resolves to the comments newer
+ * than the one with that id, oldest first, as [{ id, body }]; append(body) adds one;
+ * has(id) tells whether a comment is still there.
  * Failures reject with an Error whose `code` is "offline", "token", "denied",
  * "limit" or "server".
  */
@@ -93,7 +94,23 @@ var CaseCalStore = (function () {
       return { id: created.id, body: body };
     }
 
-    return { kind: "github", list: list, append: append };
+    /** Whether a comment is still in the list: the job removes a request once it has answered it. */
+    async function has(id) {
+      var response;
+      try {
+        response = await send(GITHUB_API + "/repos/" + config.repo + "/issues/comments/" + id,
+          { headers: headers, cache: "no-store" });
+      } catch (err) {
+        throw failure("offline");
+      }
+      if (response.status === 404 || response.status === 410) return false;
+      if (response.status === 401) throw failure("token");
+      if (response.status === 403 || response.status === 429) throw failure("limit");
+      if (!response.ok) throw failure("server");
+      return true;
+    }
+
+    return { kind: "github", list: list, append: append, has: has };
   }
 
   /** The demo's store: edits stay in the browser that made them. */
@@ -120,6 +137,9 @@ var CaseCalStore = (function () {
           throw failure("offline");
         }
         return comment;
+      },
+      has: async function (id) {
+        return read().some(function (comment) { return comment.id === id; });
       }
     };
   }

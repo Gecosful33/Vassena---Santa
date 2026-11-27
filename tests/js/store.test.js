@@ -146,3 +146,27 @@ test("the demo store keeps edits in the browser", async () => {
   const full = { getItem: () => "[]", setItem: () => { throw new Error("QuotaExceededError"); } };
   await assert.rejects(S.open({ kind: "local" }, { storage: full }).append("x"), (error) => error.code === "offline");
 });
+
+test("a request can be watched until the job removes it", async () => {
+  const answers = [200, 404];
+  const calls = [];
+  const send = async (url, options) => {
+    calls.push({ url, options });
+    const status = answers.shift();
+    return { status, ok: status === 200, headers: new Map(), json: async () => ({}) };
+  };
+  const store = S.open(CONFIG, { fetch: send });
+  assert.equal(await store.has(5001), true);
+  assert.equal(await store.has(5001), false);
+  assert.equal(calls[0].url, "https://api.github.com/repos/owner/repo/issues/comments/5001");
+  assert.equal(calls[0].options.cache, "no-store");
+  assert.deepEqual(Object.keys(calls[0].options.headers).sort(), ["Accept", "Authorization"]);
+});
+
+test("a watch that cannot be answered says why", async () => {
+  const refused = (status) => async () => ({ status, ok: false, headers: new Map(), json: async () => ({}) });
+  await assert.rejects(S.open(CONFIG, { fetch: refused(401) }).has(1), { code: "token" });
+  await assert.rejects(S.open(CONFIG, { fetch: refused(403) }).has(1), { code: "limit" });
+  await assert.rejects(S.open(CONFIG, { fetch: refused(500) }).has(1), { code: "server" });
+  await assert.rejects(S.open(CONFIG, { fetch: async () => { throw new TypeError("Failed to fetch"); } }).has(1), { code: "offline" });
+});

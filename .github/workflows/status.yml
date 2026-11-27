@@ -13,18 +13,32 @@ on:
     # Ogni ora, lontano dall'ora piena e dal job notturno delle 02:17 UTC.
     - cron: "43 * * * *"
   workflow_dispatch:
+  # Il tasto «Aggiorna ora» della pagina: non potendo avviare un workflow, la pagina lascia
+  # nel registro di famiglia un commento con parole fisse, e questo job parte subito.
+  issue_comment:
+    types: [created]
 
 permissions: {}
-
-# Lo stesso gruppo del job notturno: i due non pubblicano mai insieme, e l'autorizzazione
-# di Daikin (che si rinnova a ogni uso) non viene mai usata da due esecuzioni alla volta.
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   status:
     name: Leggi il pannello e pubblica
+    # Dei commenti conta solo la richiesta della pagina, scritta nel registro con il token
+    # del proprietario: il repository è pubblico, e un commento qualunque non avvia nulla.
+    if: >-
+      github.event_name != 'issue_comment' || (
+        !github.event.issue.pull_request &&
+        github.event.issue.title == 'Registro di famiglia (dati cifrati: non modificare)' &&
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.body == 'casecal-aggiorna-pannello'
+      )
+    # Lo stesso gruppo del job notturno: i due non pubblicano mai insieme, e l'autorizzazione
+    # di Daikin (che si rinnova a ogni uso) non viene mai usata da due esecuzioni alla volta.
+    # Sta sul job e non sul workflow: così un'esecuzione che il filtro qui sopra salta non
+    # entra nel gruppo, e non può prendere il posto di una in attesa.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -87,3 +101,12 @@ jobs:
         id: redeployment
         if: steps.deployment.outcome == 'failure'
         uses: actions/deploy-pages@v5
+
+      # La richiesta della pagina si toglie comunque, riuscita o no: è il segnale che la
+      # pagina aspetta per ricaricarsi, e nel registro restano così solo le voci.
+      - name: Chiudi la richiesta della pagina
+        if: always() && github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: gh api --silent --method DELETE "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}"

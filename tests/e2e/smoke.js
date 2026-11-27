@@ -27,6 +27,7 @@ const PASSWORD = process.env.E2E_PASSWORD || "demo-calendario-delle-case"; // on
 const SCALE = Number(process.env.E2E_SCALE || 1);
 const API = "https://api.github.com";
 const LOG_PATH = "/repos/owner/repo/issues/7/comments";
+const ONE_COMMENT = "/repos/owner/repo/issues/comments/";
 const TOKEN = "github_pat_E2E";
 
 /* The demo page again, but with the settings the nightly job writes when the family log is on. */
@@ -80,6 +81,12 @@ function fakeGitHub() {
     github.calls.push({ method: request.method(), path: target.pathname, query: target.search, headers: request.headers() });
     if (github.failWith === "offline") return route.abort("internetdisconnected");
     if (github.failWith) return route.fulfill({ status: github.failWith, headers: cors, body: JSON.stringify({ message: "nope" }) });
+    if (target.pathname.startsWith(ONE_COMMENT)) {
+      // One comment by its id: there until the panel's job removes it.
+      const wanted = Number(target.pathname.slice(ONE_COMMENT.length));
+      const there = github.comments.some((comment) => comment.id === wanted);
+      return route.fulfill({ status: there ? 200 : 404, headers: cors, body: there ? JSON.stringify({ id: wanted }) : "{}" });
+    }
     if (target.pathname !== LOG_PATH) return route.fulfill({ status: 404, headers: cors, body: "{}" });
     if (request.method() === "POST") {
       const comment = { id: github.nextId++, body: JSON.parse(request.postData()).body,
@@ -117,6 +124,7 @@ async function main() {
       const address = request.url();
       if (address.startsWith(target) || address.startsWith("data:")) return;
       if (github && address.startsWith(API + LOG_PATH)) return;
+      if (github && address.startsWith(API + ONE_COMMENT)) return;
       problems.push("external request: " + address);
     });
     if (options.hasTouch) touchPages.add(page);
@@ -1061,6 +1069,25 @@ async function main() {
   github.failWith = null;
   await press(desk.page, '[data-key="sync-retry"]');
   await waitForNames(desk.page, [...demoNames, "Nonno Piero", "Zia Carla", "Salvato al terzo tentativo"]);
+
+  // «Aggiorna ora»: the page leaves a plain request in the log and waits; when the panel's
+  // job has published and removed it, the page loads itself again. The 404 that says "gone"
+  // is logged by the browser, like the refusals above.
+  const written = github.comments.length;
+  await press(phone.page, '[data-key="panel-refresh"]');
+  await phone.page.waitForFunction(() => /si ricarica da sola/.test(document.querySelector(".panel").textContent));
+  assert.ok(await phone.page.locator('[data-key="panel-refresh"]').isDisabled(), "one request at a time");
+  while (github.comments.length === written) await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(github.comments[written].body, "casecal-aggiorna-pannello");
+  const asked = github.calls.length;
+  while (!github.calls.slice(asked).some((call) => call.path === ONE_COMMENT + github.comments[written].id)) {
+    await new Promise((resolve) => setTimeout(resolve, 200)); // still there: the page keeps waiting
+  }
+  assert.ok(await phone.page.locator('[data-key="panel-refresh"]').isDisabled());
+  const loadedAgain = phone.page.waitForEvent("load", { timeout: 30000 });
+  github.comments.splice(written, 1); // what the job does when it has published
+  await loadedAgain;
+  await phone.page.waitForSelector('[data-key="panel-refresh"]:not([disabled])');
   apiFailuresExpected = false;
   await phone.context.close();
   await desk.context.close();

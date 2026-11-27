@@ -1077,11 +1077,53 @@
     ];
   }
 
+  /* «Aggiorna ora»: the page cannot run the job itself, but it can leave a request where the
+   * job looks. The request is one plain comment in the family's log, which is not an entry
+   * and is skipped by whoever reads the log; it starts the panel's workflow (status.yml),
+   * which removes it when it has published. Its going away is the sign to load the new page. */
+  var PANEL_REQUEST = "casecal-aggiorna-pannello"; // the same words as in the two workflows
+  var PANEL_POLL_MS = 8000, PANEL_WAIT_MS = 5 * 60000, PANEL_SETTLE_MS = 4000;
+  var panelRun = null; // { phase: "waiting" } or { phase: "failed", code }
+
+  function canAskPanel() { return !!(state.store && state.store.kind === "github"); }
+
+  function askPanel() {
+    if (!state || !canAskPanel() || (panelRun && panelRun.phase === "waiting")) return;
+    var session = state, started = Date.now();
+    function shown() { if (state === session) render("panel-refresh"); }
+    panelRun = { phase: "waiting" };
+    shown();
+    session.store.append(PANEL_REQUEST).then(function (request) {
+      return new Promise(function (resolve, reject) {
+        (function wait() {
+          setTimeout(function () {
+            session.store.has(request.id).then(function (there) { return there; }, function (error) {
+              // A connection that drops for a moment is not the end of the wait; a refused token is.
+              if (error && error.code === "token") throw error;
+              return true;
+            }).then(function (there) {
+              if (!there) resolve();
+              else if (Date.now() - started > PANEL_WAIT_MS) reject({ code: "late" });
+              else wait();
+            }, reject);
+          }, PANEL_POLL_MS);
+        })();
+      });
+    }).then(function () {
+      // Published a moment ago: give the site the time to serve the new page.
+      setTimeout(function () { window.location.reload(); }, PANEL_SETTLE_MS);
+    }, function (error) {
+      panelRun = { phase: "failed", code: (error && error.code) || "server" };
+      shown();
+    });
+  }
+
   /** Above everything else of a house: is the WiFi up, is the heating on, is the lake high. */
   function controlPanel() {
     var prop = visible()[0];
     var panel = prop ? L.panelOf(state.family.status, prop.id, Date.now()) : null;
     if (!panel) return null;
+    var waiting = !!panelRun && panelRun.phase === "waiting";
     var lake = panel.lake;
     var wifi = panel.wifi && gauge(
       panel.wifi.state === "online" ? "good" : panel.wifi.state === "offline" ? "bad" : "unknown",
@@ -1094,7 +1136,14 @@
     return el("section", { class: "card panel p" + prop.index, "aria-label": "Pannello di controllo di " + prop.label },
       el("div", { class: "panel-head" },
         el("h2", { text: "Pannello di controllo" }),
+        canAskPanel() ? el("button", { class: "btn quiet", type: "button", "data-key": "panel-refresh",
+          disabled: waiting, onclick: askPanel }, waiting ? "In corso…" : "Aggiorna ora") : null,
         el("p", { class: "meta", text: panel.checkedAt === null ? "" : "Rilevato " + stamp(panel.checkedAt) + " · si aggiorna ogni ora" })),
+      waiting ? el("p", { class: "meta panel-run", role: "status",
+        text: "Richiesta inviata: la pagina si ricarica da sola tra circa un minuto." }) : null,
+      panelRun && panelRun.phase === "failed" ? banner("warning", "warning", "Aggiornamento non riuscito.",
+        panelRun.code === "late" ? "Non è ancora arrivato: riapri la pagina tra qualche minuto."
+          : STORE_MESSAGES[panelRun.code] || STORE_MESSAGES.server) : null,
       lake && (lake.stage === "alarm" || lake.stage === "attention")
         ? banner(lake.stage === "alarm" ? "critical" : "warning", lake.stage === "alarm" ? "critical" : "warning",
           lake.stage === "alarm" ? "Lago in allarme." : "Lago alto.",
