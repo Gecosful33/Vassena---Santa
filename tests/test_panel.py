@@ -403,3 +403,26 @@ def test_between_nights_only_the_panel_of_the_page_online_changes(tmp_path, monk
         with pytest.raises(SyncAborted):
             sync.refresh_status(HOUSES, {}, site_url=url, passphrase=passphrase, out_dir=tmp_path / "no", now=NOW, collect=collect_panel)
     assert not (tmp_path / "no").exists()
+
+
+def test_the_page_asks_for_a_fresh_panel_with_a_comment_only_the_panel_workflow_answers():
+    import re
+    from pathlib import Path
+
+    from casecal.familylog import ISSUE_TITLE
+
+    root = Path(__file__).resolve().parent.parent
+    words = re.search(r'PANEL_REQUEST = "([a-z-]+)"', (root / "casecal/web/app.js").read_text(encoding="utf-8")).group(1)
+    status = (root / ".github/workflows/status.yml").read_text(encoding="utf-8")
+    nightly = (root / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+    # The request is a comment in the family's log, written with the owner's token: nothing else starts the job.
+    assert "issue_comment:" in status and f"github.event.issue.title == '{ISSUE_TITLE}'" in status
+    assert "github.event.comment.user.login == github.repository_owner" in status
+    assert f"github.event.comment.body == '{words}'" in status
+    # It is not an entry: the nightly job, which reads the managers' portals, leaves it alone.
+    assert f"github.event.comment.body != '{words}'" in nightly
+    # Removing it is what tells the page to load the new one, whether the run went well or not.
+    assert "always() && github.event_name == 'issue_comment'" in status and "--method DELETE" in status
+    # A run that the filter skips must not take the place of one that waits to publish.
+    for workflow in (status, nightly):
+        assert "\nconcurrency:" not in workflow and "    concurrency:\n      group: pages" in workflow

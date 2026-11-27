@@ -21,21 +21,24 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: pages
-  cancel-in-progress: false
-
 jobs:
   sync:
     name: Leggi i portali e pubblica
     # Dei commenti contano solo quelli del registro, scritti con il token del proprietario:
     # il repository è pubblico, e un commento qualunque non deve poter avviare il job.
+    # La richiesta «Aggiorna ora» della pagina non è una voce: quella la serve il pannello di controllo.
     if: >-
       github.event_name != 'issue_comment' || (
         !github.event.issue.pull_request &&
         github.event.issue.title == 'Registro di famiglia (dati cifrati: non modificare)' &&
-        github.event.comment.user.login == github.repository_owner
+        github.event.comment.user.login == github.repository_owner &&
+        github.event.comment.body != 'casecal-aggiorna-pannello'
       )
+    # Sul job e non sul workflow: un'esecuzione che il filtro qui sopra salta non entra nel
+    # gruppo. Il gruppo è lo stesso del pannello di controllo: i due non pubblicano mai insieme.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:

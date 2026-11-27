@@ -193,6 +193,7 @@ button, input { font: inherit; color: inherit; }
 .panel-head h2 { font-size: 17px; font-weight: 650; }
 .panel-head .meta { color: var(--text-muted); font-size: 13px; }
 .panel .banner { margin-top: 12px; }
+.panel-run { margin-top: 8px; color: var(--text-muted); font-size: 13px; }
 .gauges { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr)); margin-top: 12px; }
 .gauge { padding: 12px; border-radius: 12px; background: var(--surface-2); min-width: 0; }
 .gauge .label { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }

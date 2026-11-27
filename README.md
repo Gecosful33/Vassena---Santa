@@ -257,6 +257,13 @@ Il pannello si aggiorna **ogni ora** con il workflow «Pannello di controllo»
 (`.github/workflows/status.yml`), che ripubblica la pagina già online cambiando solo il
 pannello: i portali dei gestori li legge, come prima, soltanto il job notturno.
 
+Nel pannello c'è anche il tasto **«Aggiorna ora»**, per non aspettare l'ora: compare quando è
+attivo «Chi usa la casa» (il secret `FAMILY_LOG_TOKEN`), perché usa lo stesso token. La pagina
+non può avviare un workflow, quindi lascia nel registro di famiglia un commento con parole
+fisse (`casecal-aggiorna-pannello`): il workflow parte, ripubblica la pagina, cancella il
+commento, e la pagina, che aspettava proprio questo, si ricarica da sola. Serve circa un
+minuto. Lo stesso passaggio mette online anche l'ultima versione del programma.
+
 **Il lago** non richiede nessun secret: il livello (altezza idrometrica, in centimetri
 sopra lo zero di Malgrate) è un dato pubblico, letto da [laghi.net](https://laghi.net/Page/laghi)
 con la stessa richiesta che fa la loro pagina. Il pannello mostra due dati: l'altezza e
